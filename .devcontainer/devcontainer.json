@@ -1,0 +1,50 @@
+{
+    "name": "omt-placement",
+    "build": {
+        "context": "..",
+        "dockerfile": "Dockerfile",
+        "options": [
+            "--security-opt",
+            "label=disable"
+        ]
+    },
+    "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+    "workspaceFolder": "/workspace",
+    "mounts": [
+        "type=volume,source=uv-cache,target=/root/.cache/uv",
+        "source=/mnt/datasets/,target=/datasets,type=bind"
+    ],
+    "features": {
+        "ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {}
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "charliermarsh.ruff",
+                "ms-python.python",
+                "ms-toolsai.datawrangler",
+                "ms-python.debugpy",
+                "ms-toolsai.jupyter"
+            ],
+            "settings": {
+                "python.defaultInterpreterPath": "/opt/venv/bin/python",
+                "python.analysis.extraPaths": ["/workspace/src"]
+            }
+        }
+    },
+    "privileged": true,
+    "runArgs": [
+        "--userns=keep-id:uid=0,gid=0",
+        "--device=nvidia.com/gpu=all",
+        "--security-opt=label=disable",
+        "--shm-size=32g"
+    ],
+    "containerUser": "root",
+    "remoteUser": "root",
+    "updateRemoteUserUID": false,
+    "portsAttributes": {
+        "5000": {
+            "label": "mlflow"
+        }
+    }
+}

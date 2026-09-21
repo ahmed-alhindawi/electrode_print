@@ -1,0 +1,983 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Electrode Slicer</title>
+<style>
+  :root {
+    --bg: #fff;
+    --sunk: #f6f7f9;
+    --fg: #1c2024;
+    --muted: #6e7781;
+    --line: #e3e6ea;
+    --accent: #1f4e79;
+    --infill: #c0392b;
+    --hump: #e8a33d;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #1b1e23; --sunk: #16191d; --fg: #e8eaed; --muted: #949ca6; --line: #2d333b;
+      --accent: #6fa8dc; --infill: #e8705f; --hump: #f0b95d;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg); overflow: hidden;
+    display: flex; flex-direction: column;
+    font: 13.5px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  button, input, select { font: inherit; color: inherit; }
+
+  header {
+    flex: none; height: 46px; padding: 0 14px; display: flex; align-items: center; gap: 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  header b { font-weight: 600; }
+  .muted { color: var(--muted); font-size: 12.5px; }
+
+  main { flex: 1; min-height: 0; display: grid; grid-template-columns: 290px minmax(0, 1fr); }
+  aside {
+    overflow-y: auto; padding: 14px; background: var(--sunk);
+    border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 14px;
+  }
+  .stage { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+  @media (max-width: 860px) {
+    body { overflow: auto; }
+    main { grid-template-columns: 1fr; }
+    aside { border-right: 0; border-bottom: 1px solid var(--line); }
+    .stage { height: 78vh; }
+  }
+
+  /* one shared label style, used for the only two headings left */
+  .label { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+
+  #drop {
+    border: 1.5px dashed var(--line); border-radius: 7px; padding: 16px 10px; text-align: center;
+    color: var(--muted); cursor: pointer; background: var(--bg);
+  }
+  #drop:hover, #drop.over { border-color: var(--accent); }
+  #drop strong { display: block; color: var(--fg); font-weight: 600; }
+  #drop small { font-size: 11.5px; }
+
+  .rows { display: grid; grid-template-columns: 1fr 96px; gap: 6px 10px; align-items: center; }
+  .rows > span { color: var(--muted); font-size: 12.5px; }
+  input[type=number], select {
+    width: 100%; padding: 3px 6px; background: var(--bg);
+    border: 1px solid var(--line); border-radius: 5px;
+  }
+
+  .tray > summary { padding: 0; list-style-position: outside; }
+  .tray > summary::marker { color: var(--muted); }
+  .tray > .rows { margin-top: 8px; }
+  .trio { display: flex; gap: 4px; }
+  .trio input { width: 100%; min-width: 0; text-align: right; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+  .chip {
+    border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px; font-size: 12px;
+    cursor: pointer; user-select: none; background: var(--bg);
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  .chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .chip .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: .35; }
+  .chip[data-overlap="crossing"] .dot { background: var(--infill); opacity: 1; }
+  .chip[data-overlap="junction"] .dot { background: var(--hump); opacity: 1; }
+  .chip[aria-pressed="true"] .dot { opacity: 1; }
+
+  button.primary {
+    width: 100%; padding: 8px; font-weight: 600; cursor: pointer;
+    background: var(--accent); color: #fff; border: 0; border-radius: 6px;
+  }
+  button.primary:disabled { opacity: .45; cursor: not-allowed; }
+  .tool {
+    padding: 4px 9px; font-size: 12.5px; cursor: pointer; background: var(--bg);
+    border: 1px solid var(--line); border-radius: 5px;
+  }
+  .tool:hover:not(:disabled) { border-color: var(--accent); }
+  .tool:disabled { opacity: .45; cursor: not-allowed; }
+  .pair { display: flex; gap: 6px; }
+  .pair .tool { flex: 1; }
+
+  .tabs { flex: none; display: flex; border-bottom: 1px solid var(--line); }
+  .tab {
+    padding: 8px 16px; font-size: 13px; cursor: pointer; background: none; border: 0;
+    border-bottom: 2px solid transparent; color: var(--muted);
+  }
+  .tab[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); font-weight: 600; }
+
+  .bar {
+    flex: none; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    padding: 7px 12px; border-bottom: 1px solid var(--line);
+  }
+  .bar label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12.5px; }
+  .bar select { width: auto; min-width: 0; }
+  .bar input[type=range] { width: 92px; }
+  .spacer { flex: 1; }
+
+  .pane { flex: 1; min-height: 0; position: relative; display: none; }
+  .pane.on { display: block; }
+  #svgwrap, #canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #svgwrap { overflow: hidden; cursor: grab; touch-action: none; }
+  #svgwrap.drag, #canvas.drag { cursor: grabbing; }
+  #svgwrap svg { width: 100%; height: 100%; display: block; }
+  #canvas { touch-action: none; cursor: grab; display: block; }
+  .empty, #busy {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    color: var(--muted); font-size: 13px; text-align: center; padding: 20px;
+  }
+  #busy { display: none; background: color-mix(in srgb, var(--bg) 72%, transparent); z-index: 5; }
+  #busy.on { display: flex; }
+
+  #messages { position: absolute; top: 10px; left: 10px; right: 10px; z-index: 6; pointer-events: none; }
+  .note {
+    font-size: 12px; padding: 8px 10px; margin-bottom: 8px; pointer-events: auto;
+    background: var(--bg); border: 1px solid var(--line); border-left: 3px solid var(--muted);
+    border-radius: 5px;
+  }
+  .note.warn { border-left-color: var(--hump); }
+  .note.err { border-left-color: var(--infill); }
+  .note ul { margin: 4px 0 0; padding-left: 18px; }
+
+  details { flex: none; max-height: 38vh; overflow: auto; border-top: 1px solid var(--line); }
+  details.tray { max-height: none; overflow: visible; border-top: 0; }
+  summary { padding: 7px 12px; cursor: pointer; color: var(--muted); font-size: 12.5px; }
+  .inner { padding: 0 12px 12px; }
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  th, td { text-align: right; padding: 4px 7px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
+  th { color: var(--muted); font-weight: 500; font-size: 11px; cursor: help; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: var(--sunk); }
+  .bad { color: var(--infill); font-weight: 600; }
+  .tag { font-size: 10.5px; padding: 0 6px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+  .tag[data-v="crossing"] { color: var(--infill); border-color: currentColor; }
+  .tag[data-v="junction"] { color: var(--hump); border-color: currentColor; }
+</style>
+</head>
+<body>
+
+<header>
+  <b>Electrode Slicer</b>
+  <span class="muted" id="modelinfo">Drop an STL to begin</span>
+  <span class="spacer"></span>
+  <span class="muted" id="plateinfo"></span>
+</header>
+
+<main>
+  <aside>
+    <div>
+      <div id="drop" tabindex="0" role="button">
+        <strong>Drop an STL</strong>
+        <small>or click to choose</small>
+      </div>
+      <input type="file" id="file" accept=".stl,model/stl" hidden>
+    </div>
+
+    <div>
+      <span class="label" title="Dot colour shows how the pattern treats its own beads.&#10;&#10;grey — never crosses itself, so the surface stays flat&#10;amber — bead ends meet at lattice nodes&#10;red — beads cross and leave a hump at every intersection&#10;&#10;Hover a pattern for what it does.">Patterns</span>
+      <div class="chips" id="patterns"></div>
+    </div>
+
+    <div>
+      <span class="label">Density %</span>
+      <div class="chips" id="densities"></div>
+    </div>
+
+    <div class="rows">
+      <span>Perimeters</span><input type="number" id="perimeters" value="2" min="0" step="1">
+      <span>Solid skin layers</span><input type="number" id="solid_layers" value="0" min="0" step="1">
+      <span>Replicates</span><input type="number" id="replicates" value="1" min="1" step="1">
+      <span>100% references</span><input type="number" id="reference" value="1" min="0" step="1">
+    </div>
+
+    <details class="tray" id="printer-tray">
+      <summary><span class="label">Printer</span> <span class="muted" id="printer-digest"></span></summary>
+      <div class="rows">
+        <span>Preset</span><select id="printer"></select>
+        <span title="Build volume: width x depth x Z travel, in mm">Build plate mm</span>
+        <span class="trio">
+          <input type="number" id="plate_x" value="220" min="1" step="10" title="width">
+          <input type="number" id="plate_y" value="300" min="1" step="10" title="depth">
+          <input type="number" id="z_travel" value="40" min="0.1" step="5" title="Z travel">
+        </span>
+        <span title="Width of the bead the nozzle lays down. Sets the toolpath spacing and the SVG stroke width.">Extrusion width mm</span>
+        <input type="number" id="line_width" value="0.1" min="0.01" step="0.01">
+        <span>Layer height mm</span><input type="number" id="layer_height" value="0.1" min="0.01" step="0.01">
+        <span title="Leave blank to use the layer height">First layer mm</span>
+        <input type="number" id="first_layer_height" value="" min="0.01" step="0.01" placeholder="same">
+        <span title="Keep-out border around the edge of the plate">Plate margin mm</span>
+        <input type="number" id="margin" value="10" min="0" step="1">
+        <span title="Toolpath vertices closer together than this are dropped. Keep it well under the bead width.">Resolution mm</span>
+        <input type="number" id="resolution" value="0.005" min="0" step="0.005">
+      </div>
+    </details>
+
+    <details class="tray">
+      <summary><span class="label">Model &amp; output</span></summary>
+      <div class="rows">
+        <span>Units</span>
+        <select id="units">
+          <option value="auto">auto</option><option value="mm">mm</option>
+          <option value="cm">cm</option><option value="m">m</option><option value="in">in</option>
+        </select>
+        <span>Scale</span><input type="number" id="scale" value="1" min="0.01" step="0.1">
+        <span>Rotate deg</span><input type="number" id="rotate" value="0" step="15">
+        <span>Layout</span>
+        <select id="layout"><option value="matrix">matrix</option><option value="pack">pack</option></select>
+        <span title="Gap left between neighbouring electrodes">Part gap mm</span>
+        <input type="number" id="gap" value="4" min="0" step="1">
+        <span>SVG</span>
+        <select id="svg_mode">
+          <option value="stroke">stroke</option><option value="outline">outline</option>
+          <option value="both">both</option>
+        </select>
+      </div>
+    </details>
+
+    <div>
+      <button class="primary" id="run" disabled>Slice</button>
+      <div class="pair" style="margin-top:6px">
+        <button class="tool" id="dl-svg" disabled>SVG</button>
+        <button class="tool" id="dl-json" disabled>Manifest</button>
+      </div>
+    </div>
+  </aside>
+
+  <section class="stage">
+    <div class="tabs" role="tablist">
+      <button class="tab" id="tab-plate" role="tab" aria-selected="true" aria-controls="pane-plate">Plate</button>
+      <button class="tab" id="tab-3d" role="tab" aria-selected="false" aria-controls="pane-3d">3D</button>
+    </div>
+
+    <div class="bar" id="bar-plate">
+      <label>Layer <select id="layer"><option value="all">all</option></select></label>
+      <button class="tool" data-zoom="in">+</button>
+      <button class="tool" data-zoom="out">&minus;</button>
+      <button class="tool" data-zoom="fit">Fit</button>
+      <button class="tool" data-zoom="plate">Plate</button>
+      <span class="spacer"></span>
+      <span class="muted" id="zoominfo"></span>
+    </div>
+
+    <div class="bar" id="bar-3d" style="display:none">
+      <label>Electrode <select id="pick3d" style="min-width:140px"></select></label>
+      <label>Z&times; <input type="range" id="zex" min="1" max="60" value="20"></label>
+      <label>Layer <select id="layer3d"><option value="all">all</option></select></label>
+      <label><input type="checkbox" id="showhumps" checked> Humps</label>
+      <button class="tool" data-view3d="reset">Reset</button>
+      <span class="spacer"></span>
+      <span class="muted" id="info3d"></span>
+    </div>
+
+    <div class="pane on" id="pane-plate" role="tabpanel">
+      <div id="messages"></div>
+      <div id="svgwrap"><div class="empty">Drop an STL to begin.</div></div>
+      <div id="busy"><span id="busytext">slicing…</span></div>
+    </div>
+
+    <div class="pane" id="pane-3d" role="tabpanel">
+      <canvas id="canvas"></canvas>
+      <div class="empty" id="empty3d">Slice a plate, then pick an electrode.</div>
+    </div>
+
+    <details open>
+      <summary>Measurements &middot; hover a column for what it means &middot; click a row to see it in 3D</summary>
+      <div class="inner" style="overflow-x:auto">
+        <table id="stats">
+          <thead><tr>
+            <th title="Infill pattern">pattern</th>
+            <th title="How the pattern treats its own beads: none, junction, or crossing">overlap</th>
+            <th title="Infill density requested">target</th>
+            <th title="Infill density actually achieved -- regress against this one">actual</th>
+            <th title="Total length of bead laid down, all layers">path mm</th>
+            <th title="Bead-over-bead crossings per mm2 on the skin-facing top layer">X/mm&sup2;</th>
+            <th title="Bead-over-bead crossings across all layers -- the humps under test">X tot</th>
+            <th title="Nodes where bead ends meet without crossing">junc</th>
+            <th title="All doubled-up footprint, including beads merely running alongside">ovl%</th>
+            <th title="Material piled specifically at crossings, in nanolitres">Xvol nL</th>
+            <th title="How proud a typical hump stands above the surface">hump mm</th>
+            <th title="Separate blobs of ink in the layer">isl</th>
+            <th title="Share of ink not connected to a perimeter -- it carries no current">dead%</th>
+          </tr></thead>
+          <tbody><tr><td colspan="13" class="muted" style="text-align:center">no results yet</td></tr></tbody>
+        </table>
+      </div>
+    </details>
+  </section>
+</main>
+
+<script>
+
+(() => {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  const escapeHtml = (s) => String(s).replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c]);
+
+  const state = {
+    stl: null, filename: null, svg: null, manifest: null, doc: null,
+    plate: [220, 300, 40], variants: [], busy: false,
+    view: null, fit: null,          // 2D viewBox state
+    stale: false,                   // a change arrived while a slice was running
+    everSliced: false,              // has anything been sliced in this session?
+    userMoved: false,               // has the user panned or zoomed themselves?
+    pendingFit: false,              // a fit deferred because the pane was hidden
+    detail: null, pick: null,       // 3D
+  };
+
+  // Whatever the chosen machine says, so a blank field falls back to the
+  // machine rather than to a number hard-coded in the page.
+  let preset = { plate_x: 220, plate_y: 300, z_travel: 40, line_width: 0.1,
+                 layer_height: 0.1, margin: 10, resolution: 0.005, gap: 4 };
+  let printers = {};
+
+  // =====================================================================
+  // controls
+  // =====================================================================
+  function chip(label, overlap, on) {
+    const b = document.createElement("button");
+    b.className = "chip"; b.type = "button";
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+    if (overlap) b.dataset.overlap = overlap;
+    b.innerHTML = overlap ? `<span class="dot"></span>${label}` : label;
+    b.addEventListener("click", () => {
+      b.setAttribute("aria-pressed", b.getAttribute("aria-pressed") === "true" ? "false" : "true");
+      schedule();
+    });
+    return b;
+  }
+  const pressed = (box) => [...box.querySelectorAll('[aria-pressed="true"]')].map((b) => b.dataset.value);
+
+  async function boot() {
+    const meta = await (await fetch("/api/patterns")).json();
+    const chosen = new Set(meta.defaults.patterns);
+    for (const p of meta.patterns) {
+      if (p.name === "none") continue;
+      const c = chip(p.name, p.overlap, chosen.has(p.name));
+      c.dataset.value = p.name; c.title = p.description;
+      $("patterns").append(c);
+    }
+    const want = new Set(meta.defaults.densities);
+    for (const d of [10, 20, 30, 40, 50, 60, 70, 80, 90]) {
+      const c = chip(String(d), null, want.has(d));
+      c.dataset.value = String(d);
+      $("densities").append(c);
+    }
+    printers = Object.fromEntries(meta.printers.map((m) => [m.name, m]));
+    preset = { ...preset, ...meta.defaults };
+    $("printer").replaceChildren(
+      ...meta.printers.map((m) => new Option(m.name, m.name)));
+    $("printer").value = meta.defaults.printer;
+    applyPreset(meta.defaults.printer);
+  }
+
+  /** Load a machine's own numbers into the printer form. */
+  function applyPreset(name) {
+    const m = printers[name];
+    if (!m) return;
+    preset = { ...preset, plate_x: m.plate[0], plate_y: m.plate[1], z_travel: m.plate[2],
+               line_width: m.line_width, layer_height: m.layer_height,
+               margin: m.margin, resolution: m.resolution };
+    $("plate_x").value = m.plate[0];
+    $("plate_y").value = m.plate[1];
+    $("z_travel").value = m.plate[2];
+    $("line_width").value = m.line_width;
+    $("layer_height").value = m.layer_height;
+    $("first_layer_height").value = m.first_layer_height ?? "";
+    $("margin").value = m.margin;
+    $("resolution").value = m.resolution;
+    digest();
+  }
+
+  /** The one-line summary on the collapsed Printer tray. */
+  function digest() {
+    $("printer-digest").textContent =
+      `${$("plate_x").value}\u00d7${$("plate_y").value}\u00d7${$("z_travel").value} mm` +
+      ` \u00b7 ${$("line_width").value} mm bead`;
+  }
+
+  // =====================================================================
+  // model upload
+  // =====================================================================
+  function accept(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const bytes = new Uint8Array(reader.result);
+      let bin = "";
+      for (let i = 0; i < bytes.length; i += 0x8000) {
+        bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+      }
+      state.stl = btoa(bin); state.filename = file.name;
+      $("drop").innerHTML = `<strong>${escapeHtml(file.name)}</strong><small>${(file.size / 1024).toFixed(0)} kB · click to replace</small>`;
+      $("run").disabled = false;
+      state.view = null; state.userMoved = false;   // a new model gets a fresh fit
+      schedule();
+    };
+    reader.readAsArrayBuffer(file);
+  }
+  const drop = $("drop");
+  drop.addEventListener("click", () => $("file").click());
+  drop.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("file").click(); } });
+  $("file").addEventListener("change", (e) => accept(e.target.files[0]));
+  for (const ev of ["dragenter", "dragover"]) drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); });
+  for (const ev of ["dragleave", "drop"]) drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); });
+  drop.addEventListener("drop", (e) => accept(e.dataTransfer.files[0]));
+  window.addEventListener("dragover", (e) => e.preventDefault());
+  window.addEventListener("drop", (e) => e.preventDefault());
+
+  // =====================================================================
+  // slicing
+  // =====================================================================
+  let timer = null;
+  const schedule = () => { clearTimeout(timer); timer = setTimeout(slice, 250); };
+
+  function message(kind, title, items) {
+    const box = document.createElement("div");
+    box.className = `note ${kind}`;
+    box.innerHTML = `<b>${escapeHtml(title)}</b>` +
+      (items && items.length ? `<ul>${items.map((t) => `<li>${escapeHtml(t)}</li>`).join("")}</ul>` : "");
+    $("messages").append(box);
+  }
+
+  /**
+   * Read a number field, repairing it in place.
+   *
+   * An empty or half-typed box gives NaN, which JSON.stringify turns into
+   * null; the server then has to guess what was meant.  Fix it here instead,
+   * and write the value back so the form shows what is actually being used.
+   */
+  function num(id, fallback, lo, hi, whole) {
+    const el = $(id);
+    let v = parseFloat(el.value);
+    if (!Number.isFinite(v)) v = fallback;
+    // Counts are whole numbers on the server, so round here too rather than
+    // letting the box read 2.7 while the slice quietly used 2.
+    if (whole) v = Math.round(v);
+    v = clamp(v, lo, hi);
+    const text = String(v);
+    if (el.value !== text) el.value = text;
+    return v;
+  }
+
+  /** Like num(), but an empty box stays empty and the server uses its default. */
+  function optional(id, lo, hi) {
+    const el = $(id);
+    if (!el.value.trim()) return null;
+    const v = parseFloat(el.value);
+    if (!Number.isFinite(v)) { el.value = ""; return null; }
+    const clamped = clamp(v, lo, hi);
+    if (String(clamped) !== el.value) el.value = String(clamped);
+    return clamped;
+  }
+
+  function request() {
+    return {
+      stl: state.stl, filename: state.filename,
+      patterns: pressed($("patterns")),
+      densities: pressed($("densities")).map(Number).sort((a, b) => a - b),
+      units: $("units").value,
+      scale: num("scale", 1, 0.01, 1000),
+      rotate: num("rotate", 0, -360, 360),
+      printer: $("printer").value,
+      plate_x: num("plate_x", preset.plate_x, 1, 5000),
+      plate_y: num("plate_y", preset.plate_y, 1, 5000),
+      z_travel: num("z_travel", preset.z_travel, 0.1, 5000),
+      line_width: num("line_width", preset.line_width, 0.01, 10),
+      layer_height: num("layer_height", preset.layer_height, 0.01, 10),
+      // Blank means "same as the layer height", which the machine decides,
+      // so it is the one field that stays empty rather than being repaired.
+      first_layer_height: optional("first_layer_height", 0.01, 10),
+      margin: num("margin", preset.margin, 0, 500),
+      resolution: num("resolution", preset.resolution, 0, 1),
+      gap: num("gap", preset.gap, 0, 100),
+      perimeters: num("perimeters", 2, 0, 50, true),
+      solid_layers: num("solid_layers", 0, 0, 50, true),
+      replicates: num("replicates", 1, 1, 50, true),
+      reference: num("reference", 1, 0, 50, true),
+      layout: $("layout").value,
+      svg_mode: $("svg_mode").value,
+    };
+  }
+
+  async function slice() {
+    if (!state.stl) return;
+    if (state.busy) { state.stale = true; return; }   // re-run once this one lands
+    const req = request();
+    $("messages").replaceChildren();
+    if (!req.patterns.length || !req.densities.length) {
+      message("warn", "Pick at least one pattern and one density."); return;
+    }
+    const planned = req.patterns.length * req.densities.length * req.replicates + req.reference;
+    $("busytext").textContent = state.everSliced
+      ? `slicing ${planned} electrodes…`
+      : `slicing ${planned} electrodes… the first run does all the geometry; ` +
+        `later changes reuse it`;
+    state.busy = true; $("busy").classList.add("on"); $("run").disabled = true;
+    try {
+      const res = await fetch("/api/slice", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(req),
+      });
+      const data = await res.json();
+      state.everSliced = true;
+      if (!res.ok) {
+        message("err", "Could not slice this", [data.error]);
+        // The message panel lives on the plate tab, so go there to show it
+        // rather than leaving the 3D view silently stale.
+        if ($("tab-3d").getAttribute("aria-selected") === "true") tab("plate");
+        return;
+      }
+      show(data);
+    } catch (err) {
+      message("err", "The server did not respond", [String(err)]);
+      if ($("tab-3d").getAttribute("aria-selected") === "true") tab("plate");
+    } finally {
+      state.busy = false; $("busy").classList.remove("on"); $("run").disabled = false;
+      if (state.stale) { state.stale = false; schedule(); }
+    }
+  }
+
+  function show(data) {
+    state.svg = data.svg; state.manifest = data.manifest; state.plate = data.plate;
+    state.variants = data.variants;
+    state.doc = new DOMParser().parseFromString(data.svg, "image/svg+xml");
+    $("dl-svg").disabled = $("dl-json").disabled = false;
+
+    const m = data.model;
+    $("modelinfo").textContent = `${m.extents[0]} × ${m.extents[1]} × ${m.extents[2]} mm` +
+      (m.guessed ? ` · units guessed as ${m.units}` : ` · ${m.units}`);
+    $("plateinfo").textContent =
+      `${data.electrodes} electrodes · ${data.layers} layer${data.layers === 1 ? "" : "s"} · plate ${data.plate[0]}×${data.plate[1]} mm`;
+
+    if (data.warnings.length) message("warn", "Worth checking before you print", data.warnings);
+    if ($("svg_mode").value === "outline") {
+      message("warn", "Outline mode hides the effect you are measuring",
+        ["Unioning the beads into flat regions discards the record of a bead being laid over another. Use stroke mode to keep the crossings."]);
+    }
+
+    const keep = $("layer").value;
+    for (const sel of [$("layer"), $("layer3d")]) {
+      sel.replaceChildren(new Option("all", "all"));
+      for (let i = 0; i < data.layers; i++) sel.append(new Option(`layer ${i}`, String(i)));
+    }
+    $("layer").value = [...$("layer").options].some((o) => o.value === keep) ? keep : "all";
+
+    const prev = $("pick3d").value;
+    $("pick3d").replaceChildren();
+    for (const v of data.variants) $("pick3d").append(new Option(`${v.pattern} ${v.density_pct}%`, v.id));
+    $("pick3d").value = data.variants.some((v) => v.id === prev) ? prev : (data.variants[0] || {}).id || "";
+
+    render2d();
+    table(data.summary);
+    if ($("tab-3d").getAttribute("aria-selected") === "true") loadDetail();
+    else state.detail = null;
+  }
+
+  // =====================================================================
+  // 2D plate view: pan and zoom over the SVG viewBox
+  // =====================================================================
+  const wrap = $("svgwrap");
+
+  function currentSvg() { return wrap.querySelector("svg"); }
+
+  function render2d() {
+    if (!state.doc) return;
+    const svg = state.doc.documentElement.cloneNode(true);
+    const pick = $("layer").value;
+    if (pick !== "all") {
+      for (const g of [...svg.querySelectorAll('g[id^="layer_"]')]) {
+        if (g.id !== `layer_${String(pick).padStart(3, "0")}`) g.remove();
+      }
+    }
+    const plate = svg.querySelector("#build-plate rect");
+    if (plate) plate.setAttribute("stroke-opacity", "0.4");
+    svg.removeAttribute("width"); svg.removeAttribute("height");
+    svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+    wrap.replaceChildren(svg);
+
+    // Frame the electrodes, not the bed.  A handful of 6 mm parts on a
+    // 220 x 300 mm plate is a speck if the plate rect is measured too.
+    state.pendingFit = true;
+    requestAnimationFrame(() => refit());
+  }
+
+  /** Union of everything drawn except the build-plate outline. */
+  function contentBox(svg) {
+    let box = null;
+    for (const g of svg.querySelectorAll(":scope > g")) {
+      if (g.id === "build-plate") continue;
+      let b;
+      try { b = g.getBBox(); } catch { continue; }
+      if (!b.width && !b.height) continue;
+      box = box
+        ? { x: Math.min(box.x, b.x), y: Math.min(box.y, b.y),
+            x2: Math.max(box.x2, b.x + b.width), y2: Math.max(box.y2, b.y + b.height) }
+        : { x: b.x, y: b.y, x2: b.x + b.width, y2: b.y + b.height };
+    }
+    return box && box.x2 > box.x && box.y2 > box.y
+      ? { x: box.x, y: box.y, w: box.x2 - box.x, h: box.y2 - box.y }
+      : null;
+  }
+
+  /**
+   * Recompute the fit and, unless the user has moved the view themselves,
+   * snap to it.  Returns false when the pane is hidden -- getBBox measures
+   * nothing on a display:none subtree, so the fit waits for the tab.
+   */
+  function refit(force) {
+    const svg = currentSvg();
+    if (!svg) return false;
+    const box = contentBox(svg);
+    if (!box) return false;
+    const pad = Math.max(box.w, box.h) * 0.04 + 0.5;
+    state.fit = { x: box.x - pad, y: box.y - pad, w: box.w + 2 * pad, h: box.h + 2 * pad };
+    state.pendingFit = false;
+    if (force || !state.view || !state.userMoved) {
+      state.view = { ...state.fit };
+      state.userMoved = false;
+    }
+    applyView();
+    return true;
+  }
+
+  function applyView() {
+    const svg = currentSvg();
+    if (!svg || !state.view) return;
+    const v = state.view;
+    svg.setAttribute("viewBox", `${v.x} ${v.y} ${v.w} ${v.h}`);
+    const mmPerPx = v.w / (wrap.clientWidth || 1);
+    $("zoominfo").textContent = `${(1 / mmPerPx).toFixed(1)} px/mm`;
+  }
+
+  /** Zoom about a point given in client coordinates. */
+  function zoomAt(factor, clientX, clientY) {
+    if (!state.view) return;
+    const rect = wrap.getBoundingClientRect();
+    const svg = currentSvg();
+    if (!svg) return;
+    // preserveAspectRatio letterboxes the viewBox, so work out the real scale.
+    const scale = Math.min(rect.width / state.view.w, rect.height / state.view.h);
+    const drawnW = state.view.w * scale, drawnH = state.view.h * scale;
+    const offX = (rect.width - drawnW) / 2, offY = (rect.height - drawnH) / 2;
+    const ux = state.view.x + (clientX - rect.left - offX) / scale;
+    const uy = state.view.y + (clientY - rect.top - offY) / scale;
+
+    const min = 0.05, max = Math.max(state.plate[0], state.plate[1]) * 4;
+    const w = clamp(state.view.w * factor, min, max);
+    const k = w / state.view.w;
+    state.view = { x: ux - (ux - state.view.x) * k, y: uy - (uy - state.view.y) * k,
+                   w, h: state.view.h * k };
+    applyView();
+  }
+
+  wrap.addEventListener("wheel", (e) => {
+    if (!state.view) return;
+    e.preventDefault();
+    state.userMoved = true;
+    zoomAt(Math.exp(e.deltaY * 0.0016), e.clientX, e.clientY);
+  }, { passive: false });
+
+  let panning = null;
+  wrap.addEventListener("pointerdown", (e) => {
+    if (!state.view || e.button !== 0) return;
+    panning = { x: e.clientX, y: e.clientY, view: { ...state.view } };
+    state.userMoved = true;
+    wrap.setPointerCapture(e.pointerId); wrap.classList.add("drag");
+  });
+  wrap.addEventListener("pointermove", (e) => {
+    if (!panning) return;
+    const rect = wrap.getBoundingClientRect();
+    const scale = Math.min(rect.width / panning.view.w, rect.height / panning.view.h);
+    state.view = { ...state.view,
+      x: panning.view.x - (e.clientX - panning.x) / scale,
+      y: panning.view.y - (e.clientY - panning.y) / scale };
+    applyView();
+  });
+  for (const ev of ["pointerup", "pointercancel"]) {
+    wrap.addEventListener(ev, () => { panning = null; wrap.classList.remove("drag"); });
+  }
+
+  for (const b of document.querySelectorAll("[data-zoom]")) {
+    b.addEventListener("click", () => {
+      const rect = wrap.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
+      if (b.dataset.zoom === "in") { state.userMoved = true; zoomAt(1 / 1.35, cx, cy); }
+      else if (b.dataset.zoom === "out") { state.userMoved = true; zoomAt(1.35, cx, cy); }
+      else if (b.dataset.zoom === "fit") refit(true);   // back under automatic framing
+      else {
+        state.userMoved = true;
+        state.view = { x: 0, y: 0, w: state.plate[0], h: state.plate[1] };
+        applyView();
+      }
+    });
+  }
+  $("layer").addEventListener("change", render2d);
+  window.addEventListener("resize", () => { applyView(); resizeCanvas(); });
+
+  // =====================================================================
+  // 3D view
+  // =====================================================================
+  const canvas = $("canvas");
+  const ctx = canvas.getContext("2d");
+  const cam = { az: -0.6, el: 0.95, zoom: 1, panX: 0, panY: 0 };
+
+  function resizeCanvas() {
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    canvas.width = Math.round(rect.width * dpr);
+    canvas.height = Math.round(rect.height * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    draw3d();
+  }
+
+  async function loadDetail() {
+    const id = $("pick3d").value;
+    if (!state.stl || !id) {
+      state.detail = null;
+      $("empty3d").textContent = "Slice a plate, then pick an electrode.";
+      $("empty3d").style.display = "flex";
+      if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+      return;
+    }
+    state.pick = id;
+    $("empty3d").textContent = "loading…";
+    $("empty3d").style.display = "flex";
+    try {
+      const res = await fetch("/api/detail", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...request(), variant: id }),
+      });
+      const data = await res.json();
+      if (!res.ok) { $("empty3d").textContent = data.error; return; }
+      state.detail = data;
+      $("empty3d").style.display = "none";
+      resizeCanvas();
+    } catch (err) {
+      $("empty3d").textContent = String(err);
+    }
+  }
+
+  /** Orthographic projection: spin about Z, then tilt towards the viewer.
+   *
+   * Tilting rotates the (y, z) pair by the elevation, giving a screen-up axis
+   * of z*cos - y*sin and a depth axis of z*sin + y*cos.  Canvas Y points down,
+   * so it is the negated screen-up: taller layers must sit higher up the view,
+   * and further-forward geometry must sort last so it draws on top.
+   */
+  function project(x, y, z, k) {
+    const ca = Math.cos(cam.az), sa = Math.sin(cam.az);
+    const rx = x * ca - y * sa, ry = x * sa + y * ca;
+    const ce = Math.cos(cam.el), se = Math.sin(cam.el);
+    return [rx * k, (ry * se - z * ce) * k, ry * ce + z * se];
+  }
+
+  function draw3d() {
+    if (!ctx) return;
+    const rect = canvas.getBoundingClientRect();
+    ctx.clearRect(0, 0, rect.width, rect.height);
+    const d = state.detail;
+    if (!d) return;
+
+    const [ex, ey, ez] = d.extents;
+    const zex = Number($("zex").value);
+    const span = Math.max(ex, ey);
+    const k = (Math.min(rect.width, rect.height) / (span * 1.5)) * cam.zoom;
+    const cx = rect.width / 2 + cam.panX, cy = rect.height / 2 + cam.panY;
+    // Orbit about the middle of the part in all three axes.  Pivoting on the
+    // base instead swings the whole stack up and down the screen as you tilt,
+    // which reads as the part running away rather than turning.
+    const cxm = ex / 2, cym = ey / 2, czm = ez / 2;
+    const to = (x, y, z) => {
+      const p = project(x - cxm, y - cym, (z - czm) * zex, k);
+      return [cx + p[0], cy + p[1], p[2]];
+    };
+
+    const pickLayer = $("layer3d").value;
+    const layers = d.layers.filter((L) => pickLayer === "all" || String(L.index) === pickLayer);
+    // Only the topmost layer's humps are exposed -- anything lower is buried
+    // by the layer printed over it, and that buried texture never touches
+    // skin.  Drawing them all also turns the part into a bed of nails.
+    const skin = layers.length ? layers[layers.length - 1].index : -1;
+
+    // Bead width in screen units, so the picture reads as deposited material.
+    const beadPx = Math.max(1, d.line_width * k);
+    const items = [];
+    for (const L of layers) {
+      const z = L.top;                              // draw at the top of its layer
+      for (const [role, paths] of [["perimeter", L.perimeters], ["infill", L.infill]]) {
+        for (const pts of paths) {
+          const proj = pts.map(([x, y]) => to(x, y, z));
+          let depth = 0;
+          for (const p of proj) depth += p[2];
+          items.push({ depth: depth / proj.length, role, proj });
+        }
+      }
+      if ($("showhumps").checked && L.index === skin) {
+        // A crossing stands one layer proud for each bead beyond the first.
+        // Drawn with a stem down to the surface, or the markers read as dust
+        // floating above the part rather than bumps standing on it.
+        for (const [x, y, n] of L.crossings) {
+          const foot = to(x, y, z);
+          const head = to(x, y, z + d.layer_height * (n - 1));
+          items.push({ depth: head[2], role: "hump", proj: [foot, head], n });
+        }
+      }
+    }
+    items.sort((a, b) => a.depth - b.depth);        // painter's algorithm
+
+    const style = getComputedStyle(document.documentElement);
+    const colours = {
+      perimeter: style.getPropertyValue("--accent").trim(),
+      infill: style.getPropertyValue("--infill").trim(),
+      hump: style.getPropertyValue("--hump").trim(),
+    };
+    ctx.lineCap = "round"; ctx.lineJoin = "round";
+    for (const it of items) {
+      if (it.role === "hump") {
+        const [foot, head] = it.proj;
+        ctx.strokeStyle = colours.hump;
+        ctx.lineWidth = Math.max(0.5, beadPx * 0.25);
+        ctx.beginPath();
+        ctx.moveTo(foot[0], foot[1]);
+        ctx.lineTo(head[0], head[1]);
+        ctx.stroke();
+        ctx.fillStyle = colours.hump;
+        ctx.beginPath();
+        ctx.arc(head[0], head[1], beadPx * 0.45, 0, Math.PI * 2);
+        ctx.fill();
+        continue;
+      }
+      ctx.strokeStyle = colours[it.role];
+      ctx.lineWidth = beadPx;
+      ctx.beginPath();
+      ctx.moveTo(it.proj[0][0], it.proj[0][1]);
+      for (let i = 1; i < it.proj.length; i++) ctx.lineTo(it.proj[i][0], it.proj[i][1]);
+      ctx.stroke();
+    }
+
+    const top = layers.find((L) => L.index === skin);
+    const humps = top ? top.crossings.length : 0;
+    $("info3d").textContent =
+      `${d.label} · ${d.overlap} · ${humps} exposed hump${humps === 1 ? "" : "s"} ` +
+      `on layer ${skin} · Z exaggerated ${zex}×`;
+  }
+
+  let orbit = null;
+  canvas.addEventListener("pointerdown", (e) => {
+    orbit = { x: e.clientX, y: e.clientY, az: cam.az, el: cam.el,
+              panX: cam.panX, panY: cam.panY, pan: e.shiftKey || e.button === 1 };
+    canvas.setPointerCapture(e.pointerId); canvas.classList.add("drag");
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (!orbit) return;
+    const dx = e.clientX - orbit.x, dy = e.clientY - orbit.y;
+    if (orbit.pan) { cam.panX = orbit.panX + dx; cam.panY = orbit.panY + dy; }
+    else {
+      cam.az = orbit.az + dx * 0.008;
+      cam.el = clamp(orbit.el + dy * 0.008, -Math.PI / 2 + 0.02, Math.PI / 2 - 0.02);
+    }
+    draw3d();
+  });
+  for (const ev of ["pointerup", "pointercancel"]) {
+    canvas.addEventListener(ev, () => { orbit = null; canvas.classList.remove("drag"); });
+  }
+  canvas.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    cam.zoom = clamp(cam.zoom * Math.exp(-e.deltaY * 0.0016), 0.15, 60);
+    draw3d();
+  }, { passive: false });
+
+  $("zex").addEventListener("input", draw3d);
+  $("layer3d").addEventListener("change", draw3d);
+  $("showhumps").addEventListener("change", draw3d);
+  $("pick3d").addEventListener("change", loadDetail);
+  for (const b of document.querySelectorAll("[data-view3d]")) {
+    b.addEventListener("click", () => {
+      cam.az = -0.6; cam.el = 0.95; cam.zoom = 1; cam.panX = 0; cam.panY = 0;
+      draw3d();
+    });
+  }
+
+  // =====================================================================
+  // tabs
+  // =====================================================================
+  function tab(which) {
+    const is3d = which === "3d";
+    $("tab-plate").setAttribute("aria-selected", String(!is3d));
+    $("tab-3d").setAttribute("aria-selected", String(is3d));
+    $("pane-plate").classList.toggle("on", !is3d);
+    $("pane-3d").classList.toggle("on", is3d);
+    $("bar-plate").style.display = is3d ? "none" : "";
+    $("bar-3d").style.display = is3d ? "" : "none";
+    if (is3d) {
+      if (!state.detail || state.pick !== $("pick3d").value) loadDetail();
+      else resizeCanvas();
+    } else if (state.pendingFit || !state.fit) refit();
+    else applyView();
+  }
+  $("tab-plate").addEventListener("click", () => tab("plate"));
+  $("tab-3d").addEventListener("click", () => tab("3d"));
+
+  // =====================================================================
+  // results table
+  // =====================================================================
+  function table(rows) {
+    const body = $("stats").tBodies[0];
+    body.replaceChildren();
+    for (const r of rows) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = [
+        r.pattern, `<span class="tag" data-v="${r.overlap}">${r.overlap}</span>`,
+        `${r.target_pct}%`, `${r.actual_pct}%`, r.path_mm, r.crossings_per_mm2,
+        r.crossings, r.junctions, `${r.overlap_pct}%`, r.crossing_volume_nl, r.hump_mm,
+        r.islands > 1 ? `<span class="bad">${r.islands}</span>` : r.islands,
+        r.dead_pct > 0 ? `<span class="bad">${r.dead_pct}%</span>` : "0%",
+      ].map((c) => `<td>${c}</td>`).join("");
+      tr.addEventListener("click", () => {
+        const match = state.variants.find(
+          (v) => v.pattern === r.pattern && Math.abs(v.density_pct - r.target_pct) < 0.05);
+        if (!match) return;
+        $("pick3d").value = match.id;
+        tab("3d");
+      });
+      body.append(tr);
+    }
+    if (!rows.length) {
+      body.innerHTML = '<tr><td colspan="13" style="text-align:center;color:var(--muted)">no results</td></tr>';
+    }
+  }
+
+  // =====================================================================
+  // export
+  // =====================================================================
+  function download(name, text, type) {
+    const url = URL.createObjectURL(new Blob([text], { type }));
+    const a = document.createElement("a");
+    a.href = url; a.download = name; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  const stem = () => (state.filename || "electrodes").replace(/\.stl$/i, "");
+  $("dl-svg").addEventListener("click", () => download(`${stem()}-plate.svg`, state.svg, "image/svg+xml"));
+  $("dl-json").addEventListener("click", () =>
+    download(`${stem()}-plate.json`, JSON.stringify(state.manifest, null, 2), "application/json"));
+
+  $("run").addEventListener("click", slice);
+  for (const id of ["units", "scale", "rotate", "line_width", "layer_height", "perimeters",
+                    "solid_layers", "replicates", "reference", "layout", "svg_mode",
+                    "plate_x", "plate_y", "z_travel", "first_layer_height", "margin",
+                    "resolution", "gap"]) {
+    $(id).addEventListener("change", schedule);
+  }
+  for (const id of ["plate_x", "plate_y", "z_travel", "line_width"]) {
+    $(id).addEventListener("input", digest);
+  }
+  $("printer").addEventListener("change", (e) => { applyPreset(e.target.value); schedule(); });
+  new ResizeObserver(() => { applyView(); resizeCanvas(); }).observe($("pane-plate"));
+  boot();
+})();
+</script>
+</body>
+</html>

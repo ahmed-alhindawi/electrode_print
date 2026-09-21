@@ -1,0 +1,40 @@
+[project]
+name = "electrode_slicer"
+version = "0.0.1"
+description = "Slicer profiles to print electrodes on the Voltera NOVA"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "matplotlib>=3.8",
+    "trimesh>=4.5",
+    "shapely>=2.0",
+    "networkx>=3.2",
+    "contourpy>=1.2",
+    # trimesh reaches for this to decode ASCII STLs that are not UTF-8
+    "charset-normalizer>=3.3",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+# The package lives under src/ and is used from there, matching the
+# devcontainer's PYTHONPATH.  Nothing here needs building or installing.
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"

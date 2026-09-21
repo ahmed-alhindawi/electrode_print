@@ -1,0 +1,404 @@
+# omt-placement
+
+Physiology-driven peri-orbital electrode placement for ocular microtremor.
+
+This repository also carries `electrode_slicer`, which slices the electrode
+model into SVG toolpaths for the Voltera NOVA and sweeps infill pattern against
+infill density across the build plate.
+
+## Setup
+
+The project uses [uv](https://docs.astral.sh/uv/). The devcontainer builds the
+environment at `/opt/venv` and puts `src/` on `PYTHONPATH`; outside it:
+
+```bash
+uv sync                      # create/refresh the environment from uv.lock
+uv run python -m pytest      # 473 tests
+uv run ruff check .
+```
+
+## Three ways in
+
+```bash
+# 1. a full sweep on the plate
+uv run python slice_electrode.py model/electrode.stl -o build/sweep.svg
+
+# 2. the interactive visualiser: drop an STL, play, export
+uv run python -m electrode_slicer.web --open
+
+# 3. as a library
+python -c "from electrode_slicer import load_mesh, run_sweep, VOLTERA_NOVA"
+```
+
+## Layout
+
+```
+src/electrode_slicer/
+  printer.py     the machine: build volume, bead width, layer height
+  io.py          reading STLs; writing SVGs and manifests
+  patterns/      the abstract infill pattern and every implementation
+    base.py        InfillPattern, FillContext, the registry
+    hatch.py       lines, grid, triangles, stars, solid, none
+    curves.py      serpentine, hilbert
+    honeycomb.py  tpms.py
+  slicer.py      layers, walls, density calibration
+  metrics.py     how much the toolpath crosses itself
+  mechanics.py   frame model: how readily the network bends
+  layout.py      arranging a sweep on the plate
+  sweep.py       the pipeline the CLI and the web app share
+  cli.py         the command line
+  web/           the local visualiser: server + a single-page front end
+tests/           one file per module
+slice_electrode.py   thin wrapper so the tool stays runnable as a script
+```
+
+Adding an infill pattern means subclassing `InfillPattern`, implementing
+`generate()`, and calling `register()`. Nothing else changes — the CLI, the web
+page and the manifest all pick it up from the registry. The one rule an
+implementation must honour is that coverage falls monotonically as its scale
+knob grows, or calibration cannot converge; `tests/test_patterns.py` checks
+that for every registered pattern.
+
+## The machine
+
+`VOLTERA_NOVA` in [printer.py](src/electrode_slicer/printer.py) is the single
+source of truth: a 220 × 300 × 40 mm build volume, a **100 µm dispensed bead**
+and a 100 µm layer height. The bead width sets the toolpath spacing *and* the
+SVG stroke width, so a 100 µm bead is written as `stroke-width="0.1"`.
+
+Override any of it per run — `--plate`, `--line-width`, `--layer-height`,
+`--first-layer-height`, `--margin`, `--simplify` — or from the Printer tray in
+the web app. A second machine is a new `Printer` instance added to `PRINTERS`;
+it then appears in the CLI's `--printer` choices and the web preset dropdown
+with nothing else to change.
+
+### The model is in metres
+
+`model/electrode.stl` is authored in metres: a Ø5 mm disc, 0.3 mm tall, with a
+1.5 mm connection tab on the bottom 0.1 mm. Nothing in an STL records its unit,
+so the loader guesses (anything under 1 unit across is treated as metres) and
+says what it decided. Override with `--input-units`.
+
+## Output conventions
+
+* 1 SVG user unit = 1 mm, origin at the front-left plate corner, +Y towards the
+  back. The Y flip into SVG screen space is baked into the coordinates rather
+  than applied as a group transform, because CAM importers routinely ignore
+  transforms. `--no-flip-y` disables it.
+* Each print layer is an Inkscape-style layer group (`layer_000`, …); within it
+  each electrode is a group carrying `data-pattern`, `data-density`,
+  `data-overlap` and `data-crossings`.
+* Toolpaths are stroked centrelines. `--svg-mode outline` emits the deposited
+  area as filled regions instead — but see the traps below.
+* `build-plate` and `annotations` are separate groups, so they can be deleted
+  before printing.
+* Toolpaths are simplified to 5 µm before being measured or written. An STL
+  tessellates the Ø5 mm disc into ~1400 facets, which the slice inherits;
+  emitting them all makes a plate-sized SVG tens of megabytes of sub-micron
+  moves. `--simplify 0` keeps every vertex.
+
+## The plate reads like the experiment
+
+The default layout is a matrix: **one row per infill pattern, one density per
+column**, replicates side by side inside their density block, and fully dense
+reference electrodes on a row of their own at the bottom. Rows and columns are
+labelled on the plate, so it can be read without the manifest.
+
+```bash
+uv run python slice_electrode.py -o build/sweep.svg \
+    --infill-pattern lines gyroid honeycomb grid triangles stars \
+    --infill-density 20 40 60 80 --replicates 3
+```
+
+`--reference N` changes how many 100% electrodes are added (default 1, `0` for
+none). `--layout pack` falls back to simply filling the plate in order.
+
+## Comparing infill patterns
+
+The patterns span one axis: **how often the nozzle drives over a bead it has
+already laid down in the same layer**. Run `--list-patterns` for the live table.
+
+| class | patterns | behaviour |
+|---|---|---|
+| `none` | `lines`, `serpentine`, `hilbert`, `gyroid`, `solid` | no bead is laid over another; the surface stays flat |
+| `junction` | `honeycomb` | bead *ends* meet at lattice nodes; a modest pile-up |
+| `crossing` | `stitched`, `grid`, `triangles`, `stars` | the nozzle crosses earlier beads and leaves a discrete hump at every intersection |
+
+`grid` → `triangles` → `stars` (2, 3 and 4 line families) increases crossings
+per unit area at the same density. At the 100 µm bead the full sweep spans
+roughly **0 → 53 crossings/mm²**.
+
+### Densities mean the same thing for every pattern
+
+A cross-pattern comparison is only meaningful if "40% infill" is one quantity.
+The slicer does not trust the analytic spacing formula; it bisects on each
+pattern's scale knob until the *measured* area coverage of the infill region
+matches the request, normally to within 0.5%. `--no-calibrate` falls back to the
+formula.
+
+Some patterns cannot resolve some densities on a part this small — concentric
+rings on a Ø5 mm disc quantise coarsely. The tool warns and the manifest records
+what was achieved. **Regress against the achieved density, not the requested
+one.**
+
+`solid` ignores the density it is given — it is fully dense by definition — so
+putting it in `--infill-pattern` alongside a density sweep just produces
+duplicates of the same pad. The tool says so once and points at `--reference`,
+which already places a 100% electrode on its own row.
+
+`--solid-layers N` makes the first and last N layers fully dense; each layer is
+then judged against its own target, so a deliberate solid skin is not reported
+as a calibration miss. It is off by default, since a solid skin covers over
+exactly the texture under test.
+
+### How flexible is it, structurally?
+
+`--flexibility` models each layer as a planar frame of Euler-Bernoulli beams
+and reports how readily it bends. This needs no material data: in a linear
+frame, Young's modulus and the bead cross section are scalar multipliers on
+the whole stiffness matrix, so setting both to one leaves numbers that depend
+only on how the beads are arranged. **Absolute values are meaningless; ratios
+between patterns at matched density are the point.**
+
+Joints are rigid, because two beads that cross are fused by the ink, and a
+rigid joint resists relative rotation where a pinned one would not. Bead ends
+that overlap a wall are welded to it, and pieces whose beads fuse side by side
+are bridged — without that the frame has free-floating parts and no solution.
+
+The solver is checked against closed-form results (`PL³/3EI`, `PL/EA`, mesh
+independence, and a diagonal brace stiffening a square frame) in
+[tests/test_mechanics.py](tests/test_mechanics.py).
+
+Measured on this electrode at 60% density, relative to `lines` at 20%:
+
+| pattern | bend | stretch | braced joints | humps/mm² |
+|---|---|---|---|---|
+| `serpentine` | **2.69** | **10.42** | 1% | 0 |
+| `hilbert` | 1.87 | 4.20 | 3% | 0.24 |
+| `gyroid` | 0.84 | 0.42 | 2% | 0 |
+| `lines` | 0.61 | 0.35 | 17% | 0 |
+| `grid` | 0.21 | 0.01 | 55% | 13.5 |
+| `triangles` | 0.19 | 0.00 | 66% | 18.8 |
+| `stars` | 0.19 | 0.00 | 62% | 20.6 |
+
+**This is a confound, and a sharp one.** The patterns that produce the most
+humps are the least able to conform: `stars` is 14× stiffer in bending and
+several hundred times stiffer in stretch than `serpentine`. The mechanism is
+in the `braced joints` column — a crossing is a rigid weld that triangulates
+the network, which is the same geometry that makes the hump.
+
+So texture and compliance cannot be varied independently by choosing a
+pattern. Note the direction, though: a stiffer electrode conforms *worse*, so
+it should show *worse* impedance. If the crossing patterns win anyway, that
+argues for the micro-needle effect rather than against it. If they lose, the
+result is ambiguous and you would need a stiffness-matched comparison —
+`serpentine` against `hilbert` varies bending by only 1.4× at 60%.
+
+Only relative bending is modelled, per layer. Bonding between layers is not,
+so these compare the networks against each other rather than predicting the
+stiffness of the finished three-layer laminate.
+
+### Trading humps against bending
+
+Humps need crossings, crossings brace the network, and a braced network
+resists bending — so the two cannot both be maximised. `--flexibility` marks
+the Pareto front with a `*`: rows that nothing else in the sweep beats on
+*both* counts.
+
+The trade is not a smooth slope. Fitting compliance against hump count across
+the lattice patterns gives an exponent of **−0.41**, where a braced lattice
+would predict −1.5. What the data actually shows is a **cliff**: the first
+crossings cost about 5× the compliance, and every hump after that is
+comparatively cheap. So the decision is not "how many humps" but "can I
+afford the first one at all" — and if the answer is yes, there is little
+reason to stop at a few.
+
+`stitched` is built for that region: a compliant serpentine carrying the
+density, with a sparse cross-stitch every `--stitch-ratio` rows supplying the
+humps. Across a wide sweep it holds 18 of the 33 Pareto-front points, most of
+them in the gap between the soft crossing-free fills and the braced lattices.
+
+**It is also the cleanest experimental axis.** At a fixed 60% density:
+
+| what you vary | humps/mm² | ink spread | compliance spread |
+|---|---|---|---|
+| pattern, `serpentine` → `stars` | 0 → 20.6 | 1.26× | **14×** |
+| `--stitch-ratio`, 16 → 2 | 1.9 → 11.4 | **1.11×** | **2.1×** |
+
+Sweeping the stitch ratio moves hump count sixfold while holding ink to 11%
+and stiffness to about 2×. Switching pattern family moves the same axis but
+drags a fourteenfold stiffness change along with it, which is not a
+controlled comparison:
+
+```bash
+for r in 2 4 8 12 16; do
+  uv run python slice_electrode.py -o build/stitch-$r.svg \
+      --infill-pattern stitched --infill-density 60 --stitch-ratio $r \
+      --replicates 3 --flexibility
+done
+```
+
+Keep a plain `serpentine` at the same density as the zero-hump control, and a
+`stars` at the far end if you want the extreme. Regress impedance against
+`crossings_per_mm2` with `bend_compliance` and `path_length_mm` from the
+manifest as covariates — all three are recorded per electrode.
+
+### What gets measured
+
+| column | meaning |
+|---|---|
+| `X/mm2`, `X tot` | bead-over-bead crossings — the humps under test |
+| `junc` | nodes where bead *ends* meet without crossing |
+| `hump/mm` | how proud a typical hump stands, `(mean beads at a crossing − 1) × layer height` |
+| `Xvol/nL` | material piled specifically at crossings |
+| `ovl%` | *all* doubled-up footprint, including beads merely running alongside |
+| `isl` | separate blobs of ink in the layer |
+| `dead%` | the share of ink not connected to a perimeter — it carries no current |
+
+`ovl%` and `Xvol` are deliberately separate. A pattern can pile up material
+without any crossings — nested rings running close together do it — and that is
+not the effect under test.
+
+## Three traps worth knowing about
+
+**Ink volume is not matched across patterns at high density.** Overlapping beads
+deposit material without adding coverage, so at the same *measured* density a
+crossing pattern walks further than a flat one. Measured on this electrode at a
+100 µm bead, across `lines … stars`:
+
+| density | spread in path length |
+|---|---|
+| 20% | 1.13× |
+| 40% | 1.12× |
+| 60% | 1.28× |
+| 80% | 1.53× |
+
+At 80% a `stars` electrode lays **53% more silver** than a `lines` electrode of
+the same nominal density, so an impedance difference there cannot be attributed
+to surface texture. Compare at 20–40%, or control for `path_length_mm` /
+`deposited_volume_mm3` from the manifest. The CLI prints a note whenever the
+spread exceeds 1.15× at any density in the sweep.
+
+**`--svg-mode outline` destroys the effect you are testing.** It unions the
+beads into flat filled regions, which is exactly the information that says a
+bead was laid on top of another. Use the default `stroke` mode so the machine
+retraces the crossings. Both the CLI and the web page warn if you ask for it.
+
+### Crossing-free controls that conduct
+
+`serpentine` and `hilbert` are drawn as **one continuous stroke** — hatch rows
+joined end to end, and a Hilbert space-filling curve. Being single paths they
+cannot strand ink, and neither ever crosses itself, so they are crossing-free
+controls with `dead% = 0` at every density. Their turns are rounded rather
+than square, which also avoids a strain riser at every corner when the
+electrode is bent against skin.
+
+Two earlier patterns were **removed** rather than kept as options, because
+neither conducts. `concentric` strands 30–73% of its ink as the density rises
+(nested loops never touch, so an 80% electrode conducts like a 27% one) and
+`schwarz-p` breaks into as many as 225 loose closed loops. Neither can be
+fixed by tuning — the disconnection is structural — so the pattern list holds
+only fills that work.
+
+**The `dead%` column is the gate.** A printed electrode only conducts through
+ink that is joined up, and a raw island count badly understates the problem:
+four nested rings sounds minor, 73% dead ink does not. Every registered
+pattern now reports `dead% = 0` across the whole density range, and a test
+asserts that for the entire set — so if a new pattern strands ink, it fails
+before it reaches a plate.
+
+## The visualiser
+
+```bash
+uv run python -m electrode_slicer.web --open
+```
+
+Drop an STL on the page, toggle patterns and densities, adjust the slicing
+settings, and export the SVG or the manifest. It binds to localhost only and
+needs nothing outside the standard library — no CDN, so it works offline.
+
+The sidebar keeps the experiment controls in view — patterns, densities,
+perimeters, skin layers, replicates, references — and folds the rest into two
+trays:
+
+* **Printer** — preset, build plate (width × depth × Z travel), extrusion
+  width, layer height, first layer, plate margin and resolution. Collapsed it
+  shows a digest such as `220×300×40 mm · 0.1 mm bead`, so the machine is
+  visible without opening it. Picking a preset reloads its own numbers, and
+  leaving First layer blank means "same as the layer height".
+* **Model & output** — units, scale, rotation, plate layout, part gap and SVG
+  mode.
+
+Every printer field maps straight onto a `Printer` field, so anything you can
+set here you can also set from the command line, and an impossible machine is
+refused with a reason rather than a broken plate.
+
+**Plate tab.** Fills the viewport and opens framed on the electrodes, not on
+the bed — a handful of 6 mm parts on a 220 × 300 mm plate is a speck otherwise.
+Scroll to zoom about the cursor, drag to pan; `Fit` re-frames the content and
+`Whole plate` pulls back to the full bed. Re-slicing keeps whatever view you
+set yourself, and re-frames automatically if you had not touched it. A layer
+selector isolates one print layer.
+
+**3D tab.** One electrode at a time, with its layers stacked. Drag to orbit,
+shift-drag to pan, scroll to zoom. Rotation pivots about the middle of the
+part in all three axes, so tilting turns it in place rather than swinging it
+off the top of the view. Z is exaggerated by an adjustable factor — the part is
+6.5 mm across and 0.3 mm tall, so at 1× the layers are invisible.
+
+The 3D view is where the crossing hypothesis becomes legible: each bead-over-
+bead crossing is drawn as a marker standing one layer height proud of the
+surface, which is the micro-needle geometry the experiment is about. Only the
+**topmost** layer's crossings are drawn, because anything lower is buried by
+the layer printed over it and never touches skin. `lines` and `honeycomb` come
+up bare; `grid` and `stars` come up covered. Clicking a row in the measurements
+table opens that electrode in 3D.
+
+Crossing positions come from the server, from the same
+`metrics.crossing_points` the measurements use, so the markers cannot disagree
+with the numbers in the table — a test asserts the two counts match.
+
+### When something goes wrong
+
+Every rejected request is logged to the terminal running the server, with the
+reason and the underlying cause:
+
+```
+21/Sep/2026 15:31:43  400 POST /api/slice  no toolpaths were produced: the part is
+0.007 x 0.005 x 0.000 mm, too small for a 0.1 mm bead. Check the input units
+(read as 'mm') and the scale.
+```
+
+Successful requests are not logged unless you pass `--verbose`, on the grounds
+that they are noise — but a refusal is the one thing you need to see, and the
+browser only shows a short version of it.
+
+The first slice does all the geometry and takes a few seconds; after that the
+solved densities and built toolpaths are cached, so changing the layout, the
+SVG mode or the layer being viewed redraws immediately and only genuinely new
+patterns cost anything. The page opens on three patterns spanning the crossing
+axis rather than all six, so the first view arrives quickly; tick the rest when
+you want them.
+
+It calls the same `run_sweep` pipeline the CLI uses rather than reimplementing
+the geometry in JavaScript. That costs a round trip per change and buys the
+guarantee that what the browser previews is exactly what the machine would be
+sent — which for a tool whose job is measuring sub-millimetre overlap is worth
+more than the latency. Solved densities and built toolpaths are cached between
+requests, so re-slicing after a presentational change is effectively instant
+and only genuinely new geometry is recomputed.
+
+## Suggested starting sweep
+
+At 10% density the lattice is too coarse to cross more than once or twice, and
+at 80% the ink volumes diverge. Start in the middle:
+
+```bash
+uv run python slice_electrode.py -o build/sweep.svg \
+    --infill-pattern lines gyroid honeycomb grid triangles stars \
+    --infill-density 20 30 40 --replicates 3
+```
+
+Eighteen conditions × 3 replicates plus a reference = 55 electrodes, which fit
+on one plate with room to spare, over a crossing range of roughly 0 → 7/mm²
+with ink volume matched to about 13%.

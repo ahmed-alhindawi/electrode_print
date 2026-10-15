@@ -16,13 +16,14 @@ import trimesh
 from shapely import affinity
 from shapely.geometry import LineString, MultiPolygon, Point, Polygon
 from shapely.geometry import box as rectangle
-from shapely.ops import unary_union
 
 from .geometry import (
     as_polygons,
     extend_ends,
     ring_lines,
+    robust_difference,
     robust_intersection,
+    robust_union,
     simplify_paths,
     toolpath_area,
 )
@@ -214,7 +215,7 @@ class Slicer:
                 out.append(MultiPolygon())
                 continue
             polys = [p for p in section.polygons_full if p.area > 0]
-            out.append(unary_union(polys) if polys else MultiPolygon())
+            out.append(robust_union(polys) if polys else MultiPolygon())
         return out
 
     def walls(self, slice_geom):
@@ -235,7 +236,7 @@ class Slicer:
         """Where the sweep applies at height `z`, or None for everywhere."""
         if not self.config.modifiers:
             return None
-        return unary_union([m.footprint(z) for m in self.config.modifiers])
+        return robust_union([m.footprint(z) for m in self.config.modifiers])
 
     # -- density calibration ----------------------------------------------
 
@@ -381,12 +382,12 @@ class Slicer:
         if zone is not None and cfg.outside == "solid":
             # Fill everything outside the modifiers solid, and leave the sweep
             # only what is inside them -- the density is measured there alone.
-            rest = _polygonal(region.difference(zone))
+            rest = _polygonal(robust_difference(region, zone))
             region = _polygonal(robust_intersection(region, zone))
             layer.solid = self.fill_solid(rest, index, z, slice_geom)
         layer.region_area = region.area
         layer.walls_area = (slice_geom if region.is_empty
-                            else _polygonal(slice_geom.difference(region)))
+                            else _polygonal(robust_difference(slice_geom, region)))
 
         def finish() -> LayerPaths:
             layer.overlap = analyse_overlap(

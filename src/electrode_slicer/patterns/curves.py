@@ -18,7 +18,7 @@ import math
 from shapely import affinity
 from shapely.geometry import LineString, MultiLineString
 
-from ..geometry import as_linestrings, connect_along_boundary, hatch
+from ..geometry import as_linestrings, connect_along_boundary, hatch, robust_intersection
 from .base import CROSSING, NONE, FillContext, InfillPattern, register
 
 __all__ = ["Serpentine", "Hilbert", "Stitched"]
@@ -123,7 +123,7 @@ class Serpentine(InfillPattern):
         # run exactly along the boundary, and clipping a line that lies on a
         # polygon edge shatters it into fragments on rounding error alone --
         # which would undo the single continuous stroke this pattern is for.
-        return as_linestrings(ctx.region.buffer(1e-9).intersection(turned))
+        return as_linestrings(robust_intersection(ctx.region.buffer(1e-9), turned))
 
 
 def _hilbert_points(x0: float, y0: float, xi: float, xj: float,
@@ -193,7 +193,7 @@ class Hilbert(InfillPattern):
         # The curve is built on a square and clipped to the part, which cuts
         # it wherever it wanders out and back.  Rejoin the pieces along the
         # region's edge so it stays the one continuous stroke it is meant to be.
-        pieces = as_linestrings(ctx.region.intersection(turned))
+        pieces = as_linestrings(robust_intersection(ctx.region, turned))
         joined = connect_along_boundary(pieces, ctx.region, max_gap=self.max_join * cell,
                                         along=turned)
         # A corner of the curve that only just dips inside, boxed in by the

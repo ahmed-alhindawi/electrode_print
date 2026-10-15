@@ -30,6 +30,7 @@ import traceback
 import webbrowser
 import zipfile
 from collections import OrderedDict
+from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -51,6 +52,24 @@ STATIC = Path(__file__).resolve().parent / "static"
 MAX_UPLOAD = 64 * 1024 * 1024        # a generous STL, and a hard ceiling
 MAX_ELECTRODES = 400                 # refuse a request that would take minutes
 MAX_MODIFIERS = 32
+
+
+POST_ROUTES = ("/api/slice", "/api/detail", "/api/gerber", "/api/mesh", "/api/toolpaths")
+
+
+@dataclass
+class Reply:
+    """One API response, whatever carries it: HTTP here, a Web Worker in the browser."""
+
+    status: int
+    body: bytes
+    content_type: str = "application/json"
+    headers: dict = field(default_factory=dict)
+    refusal: str = ""          # why a request was turned down, for the log
+
+
+def _json_reply(status: int, payload: dict, refusal: str = "") -> Reply:
+    return Reply(status, json.dumps(payload).encode("utf-8"), refusal=refusal)
 
 
 class SliceService:
@@ -93,6 +112,37 @@ class SliceService:
             while len(self._cache) > self._cache_size:
                 self._cache.popitem(last=False)
         return loaded
+
+    def respond(self, route: str, payload: dict) -> Reply:
+        """Answer a POST to `route` with a parsed JSON `payload`.
+
+        The one place a request becomes a response, so the local server and
+        the static build -- the same code in a Web Worker, see
+        ``web/pages`` -- cannot drift apart.
+        """
+        if route not in POST_ROUTES:
+            return _json_reply(404, {"error": "not found"}, "unknown route")
+        try:
+            if route == "/api/gerber":
+                name, body, kind = self.gerber(payload)
+                return Reply(200, body, kind,
+                             {"Content-Disposition": f'attachment; filename="{name}"'})
+            work = {"/api/slice": self.slice, "/api/detail": self.detail,
+                    "/api/mesh": self.mesh, "/api/toolpaths": self.toolpaths}[route]
+            return _json_reply(200, work(payload))
+        except (ValueError, KeyError, TypeError) as exc:
+            # Everything the slicer rejects on purpose: a part that will not
+            # fit, an unknown pattern, an impossible machine, a field the
+            # browser sent as null because its input box was empty.
+            reason = str(exc).strip("'")
+            cause = exc.__cause__
+            return _json_reply(
+                400, {"error": reason},
+                reason + (f"  [{type(cause).__name__}: {cause}]" if cause else ""))
+        except Exception:                                    # pragma: no cover
+            traceback.print_exc()
+            return _json_reply(500, {"error": "the slicer failed; see the server log"},
+                               "unhandled error -- traceback above")
 
     def patterns(self) -> dict:
         return {
@@ -608,8 +658,7 @@ class Handler(BaseHTTPRequestHandler):
         # A request refused before its body is read has to end the connection:
         # kept alive, the unread body would be parsed as the next request.
         route = self.path.split("?", 1)[0]
-        if route not in ("/api/slice", "/api/detail", "/api/gerber", "/api/mesh",
-                         "/api/toolpaths"):
+        if route not in POST_ROUTES:
             self.log_refusal(404, "unknown route")
             self.close_connection = True
             self._json(404, {"error": "not found"})
@@ -635,30 +684,10 @@ class Handler(BaseHTTPRequestHandler):
             self.log_refusal(400, f"body was a {type(payload).__name__}, not an object")
             self._json(400, {"error": "request body must be a JSON object"})
             return
-        try:
-            if route == "/api/gerber":
-                name, body, kind = self.service.gerber(payload)
-                self._send(200, body, kind,
-                           {"Content-Disposition": f'attachment; filename="{name}"'})
-                return
-            work = {"/api/slice": self.service.slice, "/api/detail": self.service.detail,
-                    "/api/mesh": self.service.mesh,
-                    "/api/toolpaths": self.service.toolpaths}[route]
-            self._json(200, work(payload))
-        except (ValueError, KeyError, TypeError) as exc:
-            # Everything the slicer rejects on purpose: a part that will not
-            # fit, an unknown pattern, an impossible machine, a field the
-            # browser sent as null because its input box was empty.
-            reason = str(exc).strip("'")
-            cause = exc.__cause__
-            self.log_refusal(
-                400, reason + (f"  [{type(cause).__name__}: {cause}]" if cause else "")
-            )
-            self._json(400, {"error": reason})
-        except Exception:                                    # pragma: no cover
-            self.log_refusal(500, "unhandled error -- traceback follows")
-            traceback.print_exc()
-            self._json(500, {"error": "the slicer failed; see the server log"})
+        reply = self.service.respond(route, payload)
+        if reply.refusal:
+            self.log_refusal(reply.status, reply.refusal)
+        self._send(reply.status, reply.body, reply.content_type, reply.headers)
 
 
 def serve(host: str = "127.0.0.1", port: int = 8765, open_browser: bool = False,

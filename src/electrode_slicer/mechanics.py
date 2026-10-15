@@ -34,9 +34,8 @@ from scipy.sparse.linalg import MatrixRankWarning, spsolve
 from scipy.spatial import cKDTree
 from shapely import STRtree
 from shapely.geometry import LineString, Point
-from shapely.ops import unary_union
 
-from .geometry import as_linestrings
+from .geometry import as_linestrings, robust_union
 
 __all__ = ["FrameNetwork", "Flexibility", "build_network", "analyse_flexibility"]
 
@@ -115,7 +114,7 @@ def build_network(lines: list[LineString], snap: float = 1e-4,
     if not usable:
         return FrameNetwork(np.empty((0, 2)), np.empty((0, 2), dtype=int), np.empty(0, int))
     usable = weld_touching_ends(usable, weld)
-    noded = as_linestrings(unary_union(usable))
+    noded = as_linestrings(robust_union(usable))
     if simplify > 0:
         noded = [ln.simplify(simplify, preserve_topology=False) for ln in noded]
 

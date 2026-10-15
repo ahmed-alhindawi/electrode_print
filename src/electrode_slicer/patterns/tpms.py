@@ -16,7 +16,7 @@ from contourpy import LineType, contour_generator
 from shapely import affinity
 from shapely.geometry import LineString, MultiLineString
 
-from ..geometry import as_linestrings
+from ..geometry import as_linestrings, robust_intersection
 from .base import NONE, FillContext, InfillPattern, register
 
 __all__ = ["TpmsPattern", "Gyroid"]
@@ -66,7 +66,7 @@ class TpmsPattern(InfillPattern):
         if not curves:
             return []
         back = affinity.rotate(MultiLineString(curves), ctx.angle_deg, origin=(0, 0))
-        return as_linestrings(ctx.region.intersection(back))
+        return as_linestrings(robust_intersection(ctx.region, back))
 
 
 class Gyroid(TpmsPattern):

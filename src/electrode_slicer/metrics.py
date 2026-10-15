@@ -57,7 +57,7 @@ def crossing_nodes(infill: list[LineString], snap: float = 1e-3) -> list[dict]:
             if j <= i:
                 continue
             b = infill[j]
-            for pt in _iter_points(a.intersection(b)):
+            for pt in _iter_points(robust_intersection(a, b)):
                 key = (round(pt.x / snap), round(pt.y / snap))
                 node = nodes.setdefault(
                     key, {"x": key[0] * snap, "y": key[1] * snap,

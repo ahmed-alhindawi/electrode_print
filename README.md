@@ -34,6 +34,9 @@ uv run python -m electrode_slicer.web --open
 python -c "from electrode_slicer import load_mesh, run_sweep, VOLTERA_NOVA"
 ```
 
+The visualiser also runs with no server at all, as a static site (see
+[In the browser, on GitHub Pages](#in-the-browser-on-github-pages)).
+
 ## Layout
 
 ```
@@ -470,6 +473,33 @@ and blobs. A tip wider than the bead shows the infill strips as unprintable.
 It approximates the machine's slicer (`passes.predict_fill`), not a copy of
 it. Warnings from a slice are listed on the Plate tab, whose label shows a
 count when there are any.
+
+### In the browser, on GitHub Pages
+
+The same visualiser can be published as a static site, with the slicer running
+in each visitor's browser through [Pyodide](https://pyodide.org) (CPython built
+for WebAssembly) rather than on a server. The page is unchanged: a small shim
+hands its `/api/...` requests to a Web Worker, which answers them with the very
+`SliceService` the local server uses, so the two cannot drift apart. STLs never
+leave the browser.
+
+```bash
+uv run python -m electrode_slicer.web.pages build/pages   # build the site
+python -m http.server -d build/pages 8000                  # try it locally
+```
+
+`.github/workflows/pages.yml` tests, builds and deploys it on every push to
+`main`. To switch it on once: **Settings → Pages → Build and deployment →
+Source: GitHub Actions**. Pages needs the repository to be public, or a paid
+plan.
+
+The first visit downloads about 35 MB (Pyodide, numpy, scipy, shapely,
+trimesh), which the browser then caches; on a desktop the slicer is ready in a
+few seconds after that. Slicing runs at roughly native speed for a plate of a
+dozen electrodes. One difference is deliberate: the browser build of GEOS
+cannot report a topology error back to Python, so there the overlays snap to a
+0.1 nm grid up front instead of retrying after a failure
+(`geometry.SNAP_FIRST`).
 
 ### When something goes wrong
 

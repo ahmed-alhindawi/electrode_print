@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import random
+import sys
 
 import networkx as nx
 import numpy as np
@@ -26,6 +27,7 @@ __all__ = [
     "as_polygons",
     "robust_intersection",
     "robust_union",
+    "robust_difference",
     "toolpath_area",
     "ring_lines",
     "hatch",
@@ -73,6 +75,13 @@ def as_polygons(geom) -> list[Polygon]:
 #: can position to -- so nothing moves anywhere that matters.
 SNAP_GRID = 1e-7
 
+#: Under Pyodide (the static web build) GEOS' C++ exceptions are not turned
+#: into Python ones: a TopologyException aborts the whole interpreter instead
+#: of reaching an ``except``.  There the overlays go straight to snap-rounding
+#: on SNAP_GRID, which GEOS guarantees not to throw, rather than trying the
+#: exact overlay first and recovering.
+SNAP_FIRST = sys.platform == "emscripten"
+
 
 def robust_union(geoms):
     """Union geometries, surviving GEOS' robustness failures.
@@ -85,6 +94,8 @@ def robust_union(geoms):
     geoms = [g for g in geoms if g is not None and not g.is_empty]
     if not geoms:
         return Polygon()
+    if SNAP_FIRST:
+        return shapely.union_all(geoms, grid_size=SNAP_GRID)
     try:
         return unary_union(geoms)
     except shapely.errors.GEOSException:
@@ -114,6 +125,8 @@ def robust_intersection(a, b):
     """
     if a is None or b is None or a.is_empty or b.is_empty:
         return Polygon()
+    if SNAP_FIRST:
+        return shapely.intersection(a, b, grid_size=SNAP_GRID)
     try:
         return a.intersection(b)
     except shapely.errors.GEOSException:
@@ -129,6 +142,20 @@ def robust_intersection(a, b):
             return a.buffer(0).intersection(b.buffer(0))
         except shapely.errors.GEOSException:   # pragma: no cover
             return Polygon()
+
+
+def robust_difference(a, b):
+    """`a` less `b`, surviving GEOS' robustness failures as the others do."""
+    if a is None or a.is_empty:
+        return Polygon()
+    if b is None or b.is_empty:
+        return a
+    if SNAP_FIRST:
+        return shapely.difference(a, b, grid_size=SNAP_GRID)
+    try:
+        return a.difference(b)
+    except shapely.errors.GEOSException:
+        return shapely.difference(a, b, grid_size=SNAP_GRID)
 
 
 def toolpath_area(lines: list[LineString], line_width: float):
@@ -167,7 +194,7 @@ def hatch(region, spacing: float, angle_deg: float) -> list[LineString]:
     ]
     grid = affinity.rotate(MultiLineString(lines), angle_deg, origin=(0, 0))
     grid = affinity.translate(grid, cx, cy)
-    return as_linestrings(region.intersection(grid))
+    return as_linestrings(robust_intersection(region, grid))
 
 
 def _step_out(frm, to, distance: float):
@@ -220,7 +247,7 @@ def extend_ends(
         if limit is None:
             out.append(grown)
             continue
-        clipped = as_linestrings(grown.intersection(limit))
+        clipped = as_linestrings(robust_intersection(grown, limit))
         out.extend(clipped if clipped else [line])
     return out
 

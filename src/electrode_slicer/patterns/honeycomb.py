@@ -6,9 +6,8 @@ import math
 
 from shapely import affinity
 from shapely.geometry import LineString
-from shapely.ops import unary_union
 
-from ..geometry import as_linestrings
+from ..geometry import as_linestrings, robust_intersection, robust_union
 from .base import JUNCTION, FillContext, InfillPattern, hex_initial_scale, register
 
 __all__ = ["Honeycomb"]
@@ -60,10 +59,10 @@ class Honeycomb(InfillPattern):
 
         # unary_union dissolves the walls shared between neighbouring cells,
         # so each wall is traced once rather than twice.
-        lattice = unary_union(cells)
+        lattice = robust_union(cells)
         lattice = affinity.rotate(lattice, ctx.angle_deg, origin=(0, 0))
         lattice = affinity.translate(lattice, cx, cy)
-        return as_linestrings(ctx.region.intersection(lattice))
+        return as_linestrings(robust_intersection(ctx.region, lattice))
 
 
 register(Honeycomb())

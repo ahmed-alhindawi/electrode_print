@@ -31,7 +31,14 @@ from dataclasses import dataclass, field
 from shapely.geometry import LineString, Polygon
 from shapely.strtree import STRtree
 
-from .geometry import as_polygons, ring_lines, robust_union, tidy_area, toolpath_area
+from .geometry import (
+    as_polygons,
+    ring_lines,
+    robust_difference,
+    robust_union,
+    tidy_area,
+    toolpath_area,
+)
 
 __all__ = ["join_straightest", "separate_touching", "print_passes", "pass_artwork",
            "PassFill", "predict_fill"]
@@ -234,7 +241,7 @@ def predict_fill(area, tip: float, max_loops: int = 400) -> PassFill:
             fill.single.extend([one] * len(lines))
     fill.loops = loops
     covered = toolpath_area(loops, tip)
-    missed = robust_union(polys).difference(covered) if loops else robust_union(polys)
+    missed = robust_difference(robust_union(polys), covered) if loops else robust_union(polys)
     fill.gaps = tidy_area(missed, 0.2 * tip) if not missed.is_empty else Polygon()
     if fill.gaps is None or fill.gaps.is_empty:
         fill.gaps = Polygon()

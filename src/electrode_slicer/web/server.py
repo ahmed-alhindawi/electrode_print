@@ -1,7 +1,7 @@
 """A local web front end for the slicer.
 
 Drop an STL on the page, choose infill patterns and densities, and get the
-plate back as an SVG you can download.
+plate back as an SVG, or as Gerber top-copper (.GTL) files, to download.
 
 It runs the same :func:`~electrode_slicer.sweep.run_sweep` pipeline the command
 line uses, rather than reimplementing the geometry in JavaScript.  That costs a
@@ -20,6 +20,7 @@ import argparse
 import base64
 import binascii
 import hashlib
+import io
 import json
 import math
 import socketserver
@@ -27,16 +28,21 @@ import sys
 import threading
 import traceback
 import webbrowser
+import zipfile
 from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import numpy as np
+
+from ..geometry import as_polygons
 from ..io import SvgStyle, load_mesh_bytes
 from ..layout import LayoutConfig
 from ..metrics import crossing_points
+from ..passes import pass_artwork, predict_fill
 from ..patterns import all_patterns
 from ..printer import PRINTERS, VOLTERA_NOVA
-from ..slicer import SliceConfig
+from ..slicer import Modifier, SliceConfig
 from ..sweep import SweepRequest, run_sweep
 
 __all__ = ["serve", "main", "SliceService"]
@@ -44,6 +50,7 @@ __all__ = ["serve", "main", "SliceService"]
 STATIC = Path(__file__).resolve().parent / "static"
 MAX_UPLOAD = 64 * 1024 * 1024        # a generous STL, and a hard ceiling
 MAX_ELECTRODES = 400                 # refuse a request that would take minutes
+MAX_MODIFIERS = 32
 
 
 class SliceService:
@@ -115,8 +122,28 @@ class SliceService:
                 # Enough to span the crossing axis end to end without making
                 # the first slice a long wait; the rest are one click away.
                 "patterns": ["lines", "grid", "stars"],
-                "densities": [20, 40, 60, 80],
+                # Bracketing 20%, which printed best on the 8 mm electrode with a
+                # 0.1 mm nozzle.
+                "densities": [10, 15, 20, 25],
             },
+        }
+
+    def mesh(self, payload: dict) -> dict:
+        """The model as loaded -- units, scale and rotation applied -- for placing modifiers.
+
+        It is the same frame the modifiers are read in, so what lines up on
+        screen lines up in the slicer.  Sent as base64 typed arrays: a mesh
+        as JSON numbers is several times the size and slow to parse.
+        """
+        loaded = self._loaded(payload)
+        mesh = loaded.mesh
+        return {
+            "vertices": base64.b64encode(
+                np.ascontiguousarray(mesh.vertices, dtype="<f4").tobytes()).decode("ascii"),
+            "faces": base64.b64encode(
+                np.ascontiguousarray(mesh.faces, dtype="<u4").tobytes()).decode("ascii"),
+            "extents": [round(float(v), 4) for v in loaded.extents],
+            "units": loaded.units, "guessed": loaded.guessed,
         }
 
     def slice(self, payload: dict) -> dict:
@@ -149,7 +176,41 @@ class SliceService:
             ],
         }
 
-    def _run(self, payload: dict):
+    def gerber(self, payload: dict) -> tuple[str, bytes, str]:
+        """The plate as Gerber: a lone .GTL, or a zip of them.
+
+        By default each layer is split into print passes (see
+        :mod:`~electrode_slicer.passes`), because the NOVA fills Gerber
+        artwork with Arachne rather than following its strokes; ``gtl_mode:
+        "layers"`` writes one file per layer as drawn instead.
+
+        Returned as (filename, body, content type).  Kept off the slice
+        response because it is only wanted on export, not on every nudge.
+        """
+        result = self._run(payload)
+        stem = Path(_text(payload, "filename", "electrodes")).stem or "electrodes"
+        # The name goes into a header; keep it to characters that cannot break one.
+        stem = "".join(c if c.isalnum() or c in "-_." else "_" for c in stem)
+        mode = _text(payload, "gtl_mode", "passes")
+        if mode == "passes":
+            # Named so a sorted listing is the print order.
+            files = [(f"{stem}-layer_{idx:03d}-pass_{k}-{role}.GTL", text)
+                     for idx, k, role, text in result.gerber_passes(title=stem)]
+        elif mode == "layers":
+            files = [(f"{stem}-layer_{idx:03d}.GTL", text)
+                     for idx, text in enumerate(result.gerbers(title=stem))]
+        else:
+            raise ValueError("gtl_mode must be 'passes' or 'layers'")
+        if len(files) == 1:
+            return f"{stem}-plate.GTL", files[0][1].encode("ascii"), "application/vnd.gerber"
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as bundle:
+            for name, text in files:
+                bundle.writestr(name, text)
+        return f"{stem}-plate-gerber.zip", buffer.getvalue(), "application/zip"
+
+    def _loaded(self, payload: dict):
+        """The uploaded model, decoded, checked and prepared (cached)."""
         model = payload.get("stl")
         if not model:
             raise ValueError("no model uploaded")
@@ -163,7 +224,12 @@ class SliceService:
             raise ValueError("the uploaded model is not valid base64") from exc
         if len(data) > MAX_UPLOAD:
             raise ValueError(f"model is larger than {MAX_UPLOAD // (1024 * 1024)} MB")
+        return self.mesh_for(
+            data, _text(payload, "units", "auto"),
+            _num(payload, "scale", 1.0), _num(payload, "rotate", 0.0),
+        )
 
+    def _run(self, payload: dict):
         patterns = [
             _pattern_name(p) for p in _sequence(payload, "patterns", ["lines"])
         ]
@@ -199,20 +265,20 @@ class SliceService:
             infill_angle=_num(payload, "infill_angle", 45.0),
             solid_layers=_num(payload, "solid_layers", 0, int),
             calibrate=bool(payload.get("calibrate", True)),
+            modifiers=_modifiers(payload),
+            outside=_text(payload, "outside", "solid"),
         )
         layout_config = LayoutConfig(
             mode=_text(payload, "layout", "matrix"),
             gap=_num(payload, "gap", 4.0),
+            fiducials=bool(payload.get("fiducials", True)),
         )
         style = SvgStyle(
             mode=_text(payload, "svg_mode", "stroke"),
             labels=bool(payload.get("labels", True)),
         )
 
-        loaded = self.mesh_for(
-            data, _text(payload, "units", "auto"),
-            _num(payload, "scale", 1.0), _num(payload, "rotate", 0.0),
-        )
+        loaded = self._loaded(payload)
         request = SweepRequest(
             patterns=patterns, densities=densities,
             replicates=replicates, reference=reference,
@@ -251,6 +317,7 @@ class SliceService:
                 "density_pct": round(layer.density_actual * 100, 2),
                 "perimeters": [_coords(ln) for ln in layer.perimeters],
                 "infill": [_coords(ln) for ln in layer.infill],
+                "solid": [_coords(ln) for ln in layer.solid],
                 "crossings": [
                     [round(x, 4), round(y, 4), n]
                     for x, y, n in crossing_points(layer.infill)
@@ -267,6 +334,62 @@ class SliceService:
             "layer_height": printer.layer_height,
             "layers": layers,
         }
+
+    def toolpaths(self, payload: dict) -> dict:
+        """How the NOVA is likely to fill one electrode's GTL passes on one layer.
+
+        The NOVA does not follow the strokes in a Gerber file: it fills the
+        copper each file draws, with a tip of its own.  This hands back each
+        pass's copper alongside concentric loops a `tip_um` wide filling it
+        (see :func:`~electrode_slicer.passes.predict_fill`) and whatever they
+        miss, which is where its slicer will have to improvise.
+        """
+        wanted = _text(payload, "variant", "")
+        result = self._run(payload)
+        variants = {v.ident: v for v in result.variants}
+        if wanted not in variants:
+            raise ValueError(f"no electrode called {wanted!r} on this plate")
+        var = variants[wanted]
+        per_layer = result.layers_by_variant[var.index]
+        index = _num(payload, "layer", 0, int)
+        if not 0 <= index < len(per_layer):
+            raise ValueError(f"layer must be between 0 and {len(per_layer) - 1}")
+        tip_um = _num(payload, "tip_um", 100.0)
+        if not 10.0 <= tip_um <= 2000.0:
+            raise ValueError("tip_um must be between 10 and 2000 microns")
+        tip = tip_um / 1000.0
+        width = result.printer.line_width
+
+        passes = []
+        for k, (role, area) in enumerate(pass_artwork(per_layer[index], width)):
+            fill = predict_fill(area, tip)
+            passes.append({
+                "pass": k + 1,
+                "role": role,
+                "artwork": _rings(area),
+                "loops": [_coords(ln) for ln in fill.loops],
+                "single": fill.single,
+                "gaps": _rings(fill.gaps),
+                "area_mm2": round(fill.area, 4),
+                "path_mm": round(fill.length, 2),
+                "gap_pct": round(fill.gap_fraction * 100, 2),
+            })
+        return {
+            "variant": var.ident,
+            "label": var.label,
+            "layer": index,
+            "layers": len(per_layer),
+            "tip_um": tip_um,
+            "line_width": width,
+            "extents": [round(v, 4) for v in result.loaded.extents],
+            "passes": passes,
+        }
+
+
+def _rings(area) -> list[list[list[list[float]]]]:
+    """An area as polygons, each a list of rings: the outline, then its holes."""
+    return [[_coords(p.exterior), *(_coords(r) for r in p.interiors)]
+            for p in as_polygons(area)]
 
 
 def _coords(line) -> list[list[float]]:
@@ -348,6 +471,33 @@ def _sequence(payload: dict, key: str, default: list) -> list:
     return list(value)
 
 
+def _triple(value, field: str) -> tuple[float, float, float]:
+    if not isinstance(value, list | tuple) or len(value) != 3:
+        raise ValueError(f"{field} must be three numbers, x y z")
+    return tuple(_number(v, field) for v in value)
+
+
+def _modifiers(payload: dict) -> tuple[Modifier, ...]:
+    """The volumes the sweep is confined to; none means the whole part."""
+    value = payload.get("modifiers")
+    if _blank(value):
+        return ()
+    if not isinstance(value, list | tuple):
+        raise ValueError(f"modifiers must be a list, not a {type(value).__name__}")
+    if len(value) > MAX_MODIFIERS:
+        raise ValueError(f"at most {MAX_MODIFIERS} modifiers")
+    out = []
+    for i, item in enumerate(value, 1):
+        if not isinstance(item, dict):
+            raise ValueError(f"modifier {i} must be an object")
+        out.append(Modifier(
+            shape=_text(item, "shape", "box"),
+            center=_triple(item.get("center"), f"modifier {i} centre"),
+            size=_triple(item.get("size"), f"modifier {i} size"),
+        ))
+    return tuple(out)
+
+
 def _summary(result) -> list[dict]:
     """One row per distinct (pattern, density), matching the CLI's table."""
     rows = []
@@ -377,6 +527,13 @@ def _summary(result) -> list[dict]:
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "electrode-slicer"
+    # Keep the connection open after a response instead of hanging up, as
+    # HTTP/1.0 does.  VS Code forwards a dev container's port through a relay
+    # that exits the moment the server closes, dropping whatever it has not
+    # yet passed on; when its pipe is small the page arrives cut short and its
+    # script never runs.  With keep-alive the browser closes the connection,
+    # and only once it has the whole response.
+    protocol_version = "HTTP/1.1"
     service: SliceService
 
     def log_message(self, fmt, *args):  # quieter than the default
@@ -397,11 +554,16 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- helpers ---------------------------------------------------------
 
-    def _send(self, code: int, body: bytes, content_type: str) -> None:
+    def _send(self, code: int, body: bytes, content_type: str,
+              headers: dict[str, str] | None = None) -> None:
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        for key, value in (headers or {}).items():
+            self.send_header(key, value)
+        if self.close_connection:
+            self.send_header("Connection", "close")
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
@@ -443,18 +605,24 @@ class Handler(BaseHTTPRequestHandler):
         self.do_GET()
 
     def do_POST(self) -> None:
+        # A request refused before its body is read has to end the connection:
+        # kept alive, the unread body would be parsed as the next request.
         route = self.path.split("?", 1)[0]
-        if route not in ("/api/slice", "/api/detail"):
+        if route not in ("/api/slice", "/api/detail", "/api/gerber", "/api/mesh",
+                         "/api/toolpaths"):
             self.log_refusal(404, "unknown route")
+            self.close_connection = True
             self._json(404, {"error": "not found"})
             return
         length = int(self.headers.get("Content-Length") or 0)
         if length <= 0:
             self.log_refusal(400, "empty request body")
+            self.close_connection = True
             self._json(400, {"error": "empty request"})
             return
         if length > MAX_UPLOAD * 2:      # base64 inflates by about a third
             self.log_refusal(413, f"{length} byte body")
+            self.close_connection = True
             self._json(413, {"error": "request too large"})
             return
         try:
@@ -468,7 +636,14 @@ class Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": "request body must be a JSON object"})
             return
         try:
-            work = self.service.slice if route == "/api/slice" else self.service.detail
+            if route == "/api/gerber":
+                name, body, kind = self.service.gerber(payload)
+                self._send(200, body, kind,
+                           {"Content-Disposition": f'attachment; filename="{name}"'})
+                return
+            work = {"/api/slice": self.service.slice, "/api/detail": self.service.detail,
+                    "/api/mesh": self.service.mesh,
+                    "/api/toolpaths": self.service.toolpaths}[route]
             self._json(200, work(payload))
         except (ValueError, KeyError, TypeError) as exc:
             # Everything the slicer rejects on purpose: a part that will not

@@ -108,6 +108,11 @@ def test_path_d_of_a_single_point_is_nothing():
     assert path_d([(0, 0)], close=False) == ""
 
 
+def test_path_d_of_a_zero_length_ring_is_nothing():
+    # Written as "M 0,0 L Z" it would stop a browser drawing the whole path.
+    assert path_d([(1, 1), (1, 1)], close=True) == ""
+
+
 def test_polygon_d_emits_holes_as_extra_subpaths():
     donut = box(0, 0, 10, 10).difference(box(4, 4, 6, 6))
     assert polygon_d(donut).count("M ") == 2
@@ -225,8 +230,17 @@ def test_annotations_are_separable_from_the_toolpaths(plate):
     root = ET.fromstring(build_svg(printer, variants, layers, zs, SvgStyle(), 4.0, grid))
     notes = next(g for g in root.findall(f"{SVG_NS}g") if g.get("id") == "annotations")
     labels = [t.text for t in notes.iter(f"{SVG_NS}text")]
-    assert "lines" in labels and "20%" not in labels
-    assert any(t.startswith("grd") for t in labels)
+    assert "lines" in labels and "40%" in labels
+    # The headings name each electrode, so none carries a caption of its own.
+    assert not any(t.startswith("grd") for t in labels)
+
+
+def test_a_packed_plate_captions_each_electrode(printer, plate):
+    _, variants, layers, zs, _ = plate
+    grid = layout(variants, (4.0, 4.0), printer, LayoutConfig(mode="pack"))
+    root = ET.fromstring(build_svg(printer, variants, layers, zs, SvgStyle(), 4.0, grid))
+    labels = [t.text for t in root.iter(f"{SVG_NS}text")]
+    assert sorted(labels) == sorted(v.label for v in variants)
 
 
 def test_labels_can_be_left_out_entirely(plate):

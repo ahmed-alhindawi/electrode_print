@@ -24,9 +24,8 @@ import numpy as np
 from shapely.geometry import LineString, Point
 
 from electrode_slicer import Printer, SweepRequest, load_mesh, run_sweep
-from electrode_slicer.geometry import toolpath_area
 from electrode_slicer.mechanics import _assemble, _solve, build_network
-from electrode_slicer.metrics import analyse_overlap, crossing_points
+from electrode_slicer.metrics import crossing_points
 from electrode_slicer.patterns import FillContext, get_pattern
 from electrode_slicer.slicer import SliceConfig, Slicer
 
@@ -144,21 +143,26 @@ def fig_hump_measurement():
     fig = plt.figure(figsize=(11.5, 3.4))
     grid = fig.add_gridspec(1, 3, width_ratios=[1, 1, 1.25], wspace=0.08)
 
-    # A: the definition, on a schematic pair of beads.
+    # A: the two cases side by side, on schematic beads.
     ax = fig.add_subplot(grid[0])
-    ax.plot([0, 10], [5, 5], color=FILL, lw=7, solid_capstyle="round", alpha=0.85)
-    ax.plot([5, 5], [0, 10], color=FILL, lw=7, solid_capstyle="round", alpha=0.85)
-    ax.plot([5], [5], "o", color=HUMP, ms=9, mec=SURFACE, mew=1.2, zorder=5)
-    ax.annotate("crossing:\ntwo beads, one on the other",
-                xy=(5, 5), xytext=(7.6, 8.6), fontsize=7.5, color=INK2, ha="center",
-                arrowprops=dict(arrowstyle="-", color=MUTED, lw=0.8))
-    ax.plot([1.2, 1.2], [1.2, 3.4], color=INK2, lw=0.8)
-    ax.plot([1.2, 3.4], [1.2, 1.2], color=INK2, lw=0.8)
-    ax.text(2.3, 0.4, "junction: ends meet,\nnothing stacks", fontsize=7.5,
-            color=INK2, ha="center", va="top")
-    ax.set_xlim(-1, 11); ax.set_ylim(-3, 11)
+    # left: a crossing -- one bead passes over another, so material stacks
+    ax.plot([0, 8], [7, 7], color=FILL, lw=8, solid_capstyle="round")
+    ax.plot([4, 4], [3, 11], color=FILL, lw=8, solid_capstyle="round",
+            path_effects=None)
+    ax.plot([4], [7], "o", color=HUMP, ms=11, mec=SURFACE, mew=1.6, zorder=5)
+    ax.text(4, 1.4, "crossing\none bead over another,\nso it stands proud",
+            fontsize=7.5, color=INK2, ha="center", va="top")
+    # right: a junction -- three ends arrive, all at the same height
+    for angle in (90, 210, 330):
+        rad = math.radians(angle)
+        ax.plot([15 + 4 * math.cos(rad), 15], [7 + 4 * math.sin(rad), 7],
+                color=FILL, lw=8, solid_capstyle="round")
+    ax.text(15, 1.4, "junction\nthree ends meet,\nnothing stacks",
+            fontsize=7.5, color=INK2, ha="center", va="top")
+    ax.set_xlim(-2, 21); ax.set_ylim(-5, 12.5)
     ax.set_aspect("equal"); ax.axis("off")
-    ax.set_title("A  what is counted", loc="left", fontsize=8.5, color=INK)
+    ax.set_title("A  only the left case is counted", loc="left",
+                 fontsize=8.5, color=INK)
 
     # B: the same test applied to a real fill.
     ax = fig.add_subplot(grid[1])
@@ -247,14 +251,14 @@ def fig_calibration():
     ax2.axhline(0, color=AXIS, lw=0.8)
     ax2.axhspan(-0.5, 0.5, color=SLOT[0], alpha=0.10, lw=0)
     xs = np.arange(len(names))
-    for j, t in enumerate(targets):
+    for j, _t in enumerate(targets):
         vals = [errors[i * len(targets) + j] for i in range(len(names))]
         ax2.plot(xs + (j - 1.5) * 0.16, vals, "o", ms=5, color=SLOT[0],
                  mec=SURFACE, mew=0.8, alpha=0.85)
     ax2.set_xticks(xs)
     ax2.set_xticklabels(names, rotation=45, ha="right", fontsize=7)
     ax2.set_ylabel("achieved − requested (percentage points)")
-    ax2.set_ylim(-2, 2)
+    ax2.set_ylim(-1, 1)
     ax2.grid(axis="y", lw=0.8)
     ax2.set_axisbelow(True)
     ax2.text(0.02, 0.93, "shaded band = ±0.5 pt tolerance", transform=ax2.transAxes,
@@ -264,18 +268,58 @@ def fig_calibration():
     finish(fig, "03-density-calibration.png")
 
 
+def _rejected_fills(region):
+    """Rebuild the two fills that were dropped, so the evidence can be shown.
+
+    Neither ships any more -- that is the point of the figure -- so they are
+    reconstructed here from the same definitions the package used.
+    """
+    import numpy as np
+    from electrode_slicer.geometry import as_polygons, ring_lines
+    from electrode_slicer.patterns.tpms import TpmsPattern
+
+    width = PRINTER.line_width
+
+    def nested_rings(spacing):
+        out, current = [], region.buffer(-width / 2)
+        for _ in range(200):
+            polys = [q for q in as_polygons(current)
+                     if not q.buffer(-width / 2).is_empty]
+            if not polys:
+                break
+            out.extend(ring_lines(polys))
+            from shapely.ops import unary_union
+            current = unary_union(polys).buffer(-spacing, join_style="mitre")
+        return out
+
+    class SchwarzP(TpmsPattern):
+        name = "schwarz-p (rebuilt for this figure)"
+        description = name
+
+        def field(self, u, v, w):
+            return np.cos(u) + np.cos(v) + math.cos(w)
+
+    schwarz = SchwarzP().generate(
+        FillContext(region=region, scale=0.30, line_width=width))
+    return {"nested rings": nested_rings(width / 0.8), "Schwarz-P": schwarz}
+
+
 def fig_dead_ink():
     """Why two crossing-free patterns were dropped."""
-    fig, axes = plt.subplots(1, 3, figsize=(8.6, 3.1))
-    cases = [("concentric", "removed"), ("schwarz-p", "removed"), ("serpentine", "kept")]
     from electrode_slicer.geometry import as_polygons, robust_union
-    for ax, (name, verdict) in zip(axes, cases, strict=True):
-        try:
-            layer = layers_for(name, 0.8)[-1]
-        except KeyError:
-            ax.axis("off")
-            continue
-        beads = [ln.buffer(PRINTER.line_width / 2, quad_segs=8) for ln in layer.all_paths]
+
+    kept = layers_for("serpentine", 0.8)[-1]
+    slicer = Slicer(PRINTER, SliceConfig())
+    zs = [z for z, _ in slicer.layer_plan(electrode().height)]
+    walls, region = slicer.walls(slicer.sections(electrode().mesh, zs)[-1])
+    rejected = _rejected_fills(region)
+
+    cases = [(name, walls + fill, "rejected") for name, fill in rejected.items()]
+    cases.append(("serpentine", kept.all_paths, "kept"))
+
+    fig, axes = plt.subplots(1, 3, figsize=(8.6, 3.1))
+    for ax, (name, paths, verdict) in zip(axes, cases, strict=True):
+        beads = [ln.buffer(PRINTER.line_width / 2, quad_segs=8) for ln in paths]
         blobs = sorted(as_polygons(robust_union(beads)), key=lambda p: p.area, reverse=True)
         total = sum(b.area for b in blobs)
         dead = 1 - blobs[0].area / total if blobs else 0
@@ -285,9 +329,10 @@ def fig_dead_ink():
             for ring in blob.interiors:
                 ax.fill(*ring.xy, color=SURFACE, lw=0)
         ax.set_aspect("equal"); ax.axis("off")
-        ax.set_title(f"{name} — {verdict}\n{len(blobs)} blobs, {dead*100:.0f}% of ink dead",
-                     fontsize=8, color=INK, pad=4)
-    fig.suptitle("Connected components of the deposited ink at 80% density.  Blue is "
+        blob_word = "blob" if len(blobs) == 1 else "blobs"
+        ax.set_title(f"{name} — {verdict}\n{len(blobs)} {blob_word}, "
+                     f"{dead*100:.0f}% of ink dead", fontsize=8, color=INK, pad=4)
+    fig.suptitle("Connected components of the deposited ink at ~80% density.  Blue is "
                  "the blob joined to the perimeter; red carries no current.",
                  fontsize=8.5, color=INK, y=1.04)
     finish(fig, "04-dead-ink.png")
@@ -371,10 +416,10 @@ def fig_tradeoff():
     ref = next(b for g, n, d, x, b in points if n == "lines" and d == 0.2)
     points = [(g, n, d, x, b / ref) for g, n, d, x, b in points]
 
-    fig, (ax, ax2) = plt.subplots(1, 2, figsize=(10.5, 4.2),
-                                  gridspec_kw={"width_ratios": [1.35, 1]})
+    fig, (ax, ax2) = plt.subplots(1, 2, figsize=(11.5, 4.2),
+                                  gridspec_kw={"width_ratios": [1.45, 1], "wspace": 0.28})
     for i, group in enumerate(families):
-        xs = [max(x, 0.06) for g, n, d, x, b in points if g == group]
+        xs = [x for g, n, d, x, b in points if g == group]
         ys = [b for g, n, d, x, b in points if g == group]
         ax.plot(xs, ys, "o", ms=7, color=SLOT[i], mec=SURFACE, mew=1.0,
                 label=group, alpha=0.9, zorder=3)
@@ -382,23 +427,50 @@ def fig_tradeoff():
              if not any(b[3] >= a[3] and b[4] >= a[4] and (b[3], b[4]) != (a[3], a[4])
                         for b in points)]
     front.sort(key=lambda t: t[3])
-    ax.plot([max(x, 0.06) for *_, x, b in front], [b for *_, b in front],
+    ax.plot([x for *_, x, b in front], [b for *_, b in front],
             color=MUTED, lw=1.2, ls="--", zorder=2, label="best available trade")
-    for label, xy, off in [
-        ("serpentine 80%", (0.06, front[0][4]), (18, 0)),
-        ("stitched 40%", (0.96, 0.83), (16, 14)),
-        ("stars 80%", (52.7, 0.12), (-14, 18)),
+    def locate(name: str, density: float) -> tuple[float, float]:
+        """Find a labelled point in the data rather than hard-coding where it
+        sits.  A typed-in coordinate goes stale the moment a number moves, and
+        then the arrow points confidently at nothing."""
+        for _, n, d, x, b in points:
+            if n == name and abs(d - density) < 1e-9:
+                return x, b
+        raise KeyError(f"no point for {name} at {density:.0%}")
+
+    for label, name, density, off in [
+        # The stitch ratio is what distinguishes one stitched point from
+        # another, so a label naming only the density would be ambiguous:
+        # five stitched points share 40%, spanning 0.96 to 3.97 humps/mm2.
+        ("serpentine, 80%", "serpentine", 0.80, (34, -22)),
+        ("stitched, 40%\nstitch ratio 16", "stitched/16", 0.40, (14, 26)),
+        ("stars, 80%", "stars", 0.80, (10, 40)),
     ]:
-        ax.annotate(label, xy=xy, xytext=off, textcoords="offset points",
-                    fontsize=7.5, color=INK2,
+        ax.annotate(label, xy=locate(name, density), xytext=off,
+                    textcoords="offset points", fontsize=7.5, color=INK2,
+                    ha="left" if off[0] > 0 else "right",
                     arrowprops=dict(arrowstyle="-", color=MUTED, lw=0.7))
-    ax.axvspan(0.25, 1.45, color=SLOT[3], alpha=0.10, lw=0, zorder=0)
-    ax.text(0.6, 4.2, "the cliff", fontsize=8, color=INK2, ha="center")
-    ax.set_xscale("log"); ax.set_yscale("log")
+    # The cliff, measured from the plotted data rather than typed in: the best
+    # crossing-free point against the best one carrying any crossings at all.
+    flat = max((q for q in points if q[3] == 0), key=lambda q: q[4])
+    first = max((q for q in points if q[3] > 0), key=lambda q: q[4])
+    band_hi = min(q[3] for q in points if q[3] >= 1.0)
+    ax.axvspan(first[3] * 0.85, band_hi * 1.15, color=SLOT[3], alpha=0.12,
+               lw=0, zorder=0)
+    ax.text(math.sqrt(first[3] * band_hi), 0.30,
+            f"the cliff:\nthe first crossings\ncost {flat[4] / first[4]:.1f}x the give",
+            fontsize=7.5, color=INK2, ha="center", va="center")
+    # symlog, not log: a crossing-free pattern has exactly zero humps, and a
+    # log axis cannot show that without inventing a value for it.
+    ax.set_xscale("symlog", linthresh=0.2, linscale=0.45)
+    ax.set_yscale("log")
+    ax.set_xlim(-0.03, 90)
+    ax.axvline(0.2, color=AXIS, lw=0.8, ls=(0, (2, 2)), zorder=1)
     ax.set_xlabel("exposed humps per mm² on the skin-facing layer")
     ax.set_ylabel("bending compliance (relative to lines at 20%)")
     ax.grid(lw=0.8); ax.set_axisbelow(True)
-    ax.legend(loc="lower left", fontsize=7.5, labelcolor=INK2)
+    ax.legend(loc="upper left", bbox_to_anchor=(0.42, 1.0), fontsize=7.5,
+              labelcolor=INK2)
     ax.set_title("A  humps and bending pull against each other",
                  loc="left", fontsize=8.5, color=INK)
 
@@ -414,9 +486,9 @@ def fig_tradeoff():
         return max(vals) / min(vals)
 
     bars = [
-        ("ink laid down", spread(swap, lambda lp: lp.length),
+        ("ink", spread(swap, lambda lp: lp.length),
          spread(stitch, lambda lp: lp.length)),
-        ("bending compliance", spread(swap, lambda lp: lp.flex.bend_compliance),
+        ("bending", spread(swap, lambda lp: lp.flex.bend_compliance),
          spread(stitch, lambda lp: lp.flex.bend_compliance)),
     ]
     y = np.arange(len(bars))
@@ -434,8 +506,10 @@ def fig_tradeoff():
     ax2.legend(loc="lower right", fontsize=7.5, labelcolor=INK2)
     ax2.set_title("B  both move humps; one drags less with it",
                   loc="left", fontsize=8.5, color=INK)
-    fig.text(0.5, -0.03, "B compares two ways of varying hump count at a fixed 60% "
-             "density, over comparable hump ranges.",
+    fig.text(0.5, -0.04, "B compares two ways of moving hump count at a fixed 60% "
+             "density, over comparable hump ranges: swapping the pattern family\n"
+             "(serpentine to stars) against sweeping the stitch ratio (16 to 2). "
+             "Both change the humps; only one leaves the rest of the electrode alone.",
              ha="center", fontsize=7.5, color=INK2)
     finish(fig, "06-tradeoff.png")
 

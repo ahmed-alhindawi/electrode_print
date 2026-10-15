@@ -18,7 +18,7 @@ import math
 from shapely import affinity
 from shapely.geometry import LineString, MultiLineString
 
-from ..geometry import as_linestrings, hatch
+from ..geometry import as_linestrings, connect_along_boundary, hatch
 from .base import CROSSING, NONE, FillContext, InfillPattern, register
 
 __all__ = ["Serpentine", "Hilbert", "Stitched"]
@@ -145,10 +145,14 @@ class Hilbert(InfillPattern):
 
     name = "hilbert"
     overlap_class = NONE
-    description = "space-filling curve; one stroke, no crossings, nothing stranded"
+    description = "space-filling curve; as few strokes as the outline allows, no crossings"
     families = 1
     #: Refuse to build a curve with more cells than this.
     max_cells = 300_000
+    #: The longest run along the region's edge, in cells, used to rejoin the
+    #: pieces a clip cuts the curve into.  Beyond that a join would lay a
+    #: long bead hugging the wall, which is no longer this pattern.
+    max_join = 4.0
 
     def min_scale(self, line_width: float) -> float:
         # A cell of one bead width leaves a notch on the outside of every
@@ -186,7 +190,18 @@ class Hilbert(InfillPattern):
         # Ease the right-angle turns for the same reason as the serpentine.
         curve = LineString(_rounded(points, cell * 0.3, segments=3))
         turned = affinity.rotate(curve, ctx.angle_deg, origin=(0, 0))
-        return as_linestrings(ctx.region.intersection(turned))
+        # The curve is built on a square and clipped to the part, which cuts
+        # it wherever it wanders out and back.  Rejoin the pieces along the
+        # region's edge so it stays the one continuous stroke it is meant to be.
+        pieces = as_linestrings(ctx.region.intersection(turned))
+        joined = connect_along_boundary(pieces, ctx.region, max_gap=self.max_join * cell,
+                                        along=turned)
+        # A corner of the curve that only just dips inside, boxed in by the
+        # rest so no join can reach it, is a dot of ink rather than a path:
+        # a dispenser start and stop for nothing.  Leave those out.
+        stub = 2.0 * ctx.line_width
+        kept = [ln for ln in joined if ln.length >= stub]
+        return kept or joined
 
 
 class Stitched(Serpentine):

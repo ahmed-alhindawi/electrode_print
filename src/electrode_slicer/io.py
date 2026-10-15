@@ -2,7 +2,8 @@
 
 Input is an STL, from a path or from raw bytes so the web front end can hand
 over an upload.  Output is an SVG in real millimetres plus a JSON manifest
-recording what every electrode on the plate is and what it measured.
+recording what every electrode on the plate is and what it measured, or one
+Gerber top-copper (.GTL) file per layer for tools that take PCB artwork.
 """
 
 from __future__ import annotations
@@ -15,9 +16,17 @@ from pathlib import Path
 
 import trimesh
 from shapely import affinity
-from shapely.geometry import Polygon
+from shapely.geometry import Point, Polygon
 
-from .geometry import as_polygons, toolpath_area
+from .geometry import (
+    as_polygons,
+    chain_paths,
+    fit_arcs,
+    order_paths,
+    region_contours,
+    tidy_area,
+    toolpath_area,
+)
 
 __all__ = [
     "UNIT_SCALE",
@@ -27,6 +36,7 @@ __all__ = [
     "SvgStyle",
     "build_svg",
     "write_svg",
+    "build_gerber",
     "build_manifest",
     "write_manifest",
 ]
@@ -152,6 +162,11 @@ def path_d(coords, close: bool) -> str:
         return ""
     if close and pts[0] == pts[-1]:
         pts = pts[:-1]
+    # A zero-length sliver clipped off a lattice reads as a closed ring of one
+    # point.  Written out it is "M x,y L Z", which is invalid, and a browser
+    # stops drawing the whole path -- every other bead with it -- at the error.
+    if len(pts) < 2:
+        return ""
     head = f"M {fmt(pts[0][0])},{fmt(pts[0][1])}"
     tail = " ".join(f"{fmt(x)},{fmt(y)}" for x, y in pts[1:])
     return f"{head} L {tail}" + (" Z" if close else "")
@@ -187,12 +202,15 @@ def _variant_group(var, layer, printer, style: SvgStyle, to_svg, indent: str) ->
     ]
     roles = {
         "perimeter": [affinity.translate(ln, var.dx, var.dy) for ln in layer.perimeters],
+        "solid": [affinity.translate(ln, var.dx, var.dy) for ln in layer.solid],
         "infill": [affinity.translate(ln, var.dx, var.dy) for ln in layer.infill],
     }
     for role, lines in roles.items():
         if not lines:
             continue
-        colour = style.perimeter_colour if role == "perimeter" else style.infill_colour
+        # Solid fill outside the modifiers is plain conductor, not the pattern
+        # under test, so it takes the wall colour.
+        colour = style.infill_colour if role == "infill" else style.perimeter_colour
         if style.mode in ("stroke", "both"):
             ds = [d for d in (path_d(to_svg(ln).coords, ln.is_ring) for ln in lines) if d]
             if ds:
@@ -216,7 +234,7 @@ def _variant_group(var, layer, printer, style: SvgStyle, to_svg, indent: str) ->
 
 def build_svg(printer, variants, layers_by_variant, layer_zs, style: SvgStyle,
               part_w: float, grid=None, only_layer: int | None = None,
-              title: str = "electrodes") -> str:
+              title: str = "electrodes", fiducials=()) -> str:
     """Render the whole plate as an SVG document, in millimetres."""
     plate_x, plate_y, plate_z = printer.plate
     to_svg = flipper(plate_y, style.flip_y)
@@ -260,6 +278,23 @@ def build_svg(printer, variants, layers_by_variant, layer_zs, style: SvgStyle,
         lines.extend(body)
         lines.append("  </g>")
 
+    if fiducials:
+        # Ink, unlike the annotations: print these with every layer and pass.
+        lines.append('  <g id="fiducials" inkscape:groupmode="layer" '
+                     'inkscape:label="alignment marks (print with every layer)">')
+        for mark in fiducials:
+            d = path_d(to_svg(mark.ring()).coords, True)
+            cx, cy = to_svg(Point(mark.x, mark.y)).coords[0]
+            lines.append(
+                f'    <path class="fiducial" fill="none" stroke="{style.perimeter_colour}" '
+                f'stroke-width="{fmt(printer.line_width)}" d="{d}"/>'
+            )
+            lines.append(
+                f'    <circle class="fiducial" cx="{fmt(cx)}" cy="{fmt(cy)}" '
+                f'r="{fmt(mark.dot / 2.0)}" fill="{style.perimeter_colour}"/>'
+            )
+        lines.append("  </g>")
+
     if style.labels:
         lines.append('  <g id="annotations" inkscape:groupmode="layer" '
                      'inkscape:label="annotations (do not print)" '
@@ -271,10 +306,13 @@ def build_svg(printer, variants, layers_by_variant, layer_zs, style: SvgStyle,
             return (f'    <text x="{fmt(sx)}" y="{fmt(sy)}" text-anchor="{anchor}">'
                     f"{text}</text>")
 
-        for var in variants:
-            lines.append(place(
-                var.dx + part_w / 2.0, var.dy - style.label_size * 0.6, var.label
-            ))
+        # The axis headings name every electrode in a matrix, so a caption
+        # under each is only wanted on a packed plate, which has none.
+        if grid is None or not (grid.col_labels or grid.row_labels):
+            for var in variants:
+                lines.append(place(
+                    var.dx + part_w / 2.0, var.dy - style.label_size * 0.6, var.label
+                ))
         if grid is not None:
             # Axis headings, so the plate can be read without the manifest.
             for x, text in grid.col_labels:
@@ -295,12 +333,147 @@ def write_svg(path: str | Path, content: str) -> Path:
 
 
 # --------------------------------------------------------------------------
+# Gerber output
+# --------------------------------------------------------------------------
+
+
+def _gerber_xy(value: float) -> str:
+    """A coordinate in the 4.6 millimetre format declared in the header."""
+    return str(round(value * 1_000_000))
+
+
+def build_gerber(printer, variants, layers_by_variant, layer_index: int,
+                 z: float, title: str = "electrodes", strokes_of=None,
+                 label: str = "", fiducials=(), regions_of=None) -> str:
+    """One print layer as an RS-274X top-copper (.GTL) file.
+
+    Gerber is flat, so a part more than one layer tall needs a file per layer.
+    Every toolpath is drawn as a stroke with a round aperture the width of the
+    bead -- the same centreline-plus-width the SVG's stroke mode writes, so
+    the crossings survive rather than being unioned away.  Paths that meet end
+    to end are joined into continuous strokes and put in nearest-next order,
+    so a tool that plans its dispense from the artwork is not left starting
+    and stopping at every fragment; the ink laid down is unchanged.  Curved
+    runs -- a perimeter above all -- are written as circular arcs (G02/G03)
+    rather than dozens of chords, to within the printer's resolution.  Gerber's Y already
+    points to the back of the plate, so no flip is applied, and nothing that
+    is not ink (plate outline, labels) is written.
+
+    `strokes_of` picks which of a layer's toolpaths to draw -- one print pass
+    of it, say (see :mod:`~electrode_slicer.passes`) -- and `label` names that
+    pass in the header.  By default every toolpath is drawn.
+
+    `regions_of` picks an area of a layer to write as a filled region
+    (G36/G37) rather than as strokes -- the walls pass, which the NOVA fills
+    with its own slicer whatever is drawn, and fills cleanly only when handed
+    the area itself: a union of strokes has a scalloped edge wherever a fill
+    line ends, and pinholes wherever beads meet, and every one of those turns
+    into a kink or a stub in its toolpaths.  Holes are cut in (see
+    :func:`~electrode_slicer.geometry.region_contours`).
+
+    A region is written as plainly as a PCB tool writes a copper pour, with
+    nothing finer than the bead can print.  Notches and slivers under half a
+    bead are tidied away.  Where the outline truly is a circle -- the outer
+    wall, a modifier's edge -- it is written as arcs, as a stroke is; the
+    rest is straight segments simplified to a quarter of a bead, so the
+    mesh's tessellation is not carried through facet by facet.
+
+    `fiducials` -- the plate's alignment marks -- go into every file, the same
+    each time, so each print can be registered on the marks the first one
+    laid down (see :mod:`~electrode_slicer.fiducials`).  The ring is a stroke
+    like any toolpath; the centre dot is a flash of a second, wider aperture.
+    """
+    if strokes_of is None:
+        strokes_of = lambda layer: layer.all_paths  # noqa: E731
+    # A comment ends at "*" and "%" opens an extended command, so neither may
+    # leak in from a filename.
+    title = title.replace("*", "").replace("%", "")
+    out = [
+        f"G04 {title}: {printer.name} layer {layer_index} z={z:.4f} mm"
+        f"{' ' + label if label else ''}*",
+        "%TF.GenerationSoftware,electrode_slicer*%",
+        "%TF.FileFunction,Copper,L1,Top*%",
+        "%TF.FilePolarity,Positive*%",
+        "%FSLAX46Y46*%",
+        "%MOMM*%",
+        "%LPD*%",
+        f"%ADD10C,{fmt(printer.line_width)}*%",
+    ]
+    if fiducials:
+        out.append(f"%ADD11C,{fmt(fiducials[0].dot)}*%")
+    out += ["D10*", "G75*", "G01*"]
+    mode = "G01*"
+
+    def stroke(pts, start: bool = True, straighten: float = 0.0) -> None:
+        nonlocal mode
+        if start:
+            x0, y0 = pts[0]
+            out.append(f"X{_gerber_xy(x0)}Y{_gerber_xy(y0)}D02*")
+        here = pts[0]
+        # A cut-in's bridge must retrace itself exactly, so never fit it.
+        moves = (fit_arcs(pts, printer.resolution, straighten=straighten) if len(pts) > 2
+                 else [("line", p) for p in pts[1:]])
+        for move in moves:
+            (x, y) = move[1]
+            if move[0] == "line":
+                if mode != "G01*":
+                    out.append(mode := "G01*")
+                out.append(f"X{_gerber_xy(x)}Y{_gerber_xy(y)}D01*")
+            else:
+                (cx, cy), ccw = move[2], move[3]
+                if mode != ("G03*" if ccw else "G02*"):
+                    out.append(mode := "G03*" if ccw else "G02*")
+                out.append(f"X{_gerber_xy(x)}Y{_gerber_xy(y)}"
+                           f"I{_gerber_xy(cx - here[0])}J{_gerber_xy(cy - here[1])}D01*")
+            here = (x, y)
+
+    if fiducials:
+        out.append("G04 alignment marks: the same in every file*")
+        for mark in fiducials:
+            stroke(list(mark.ring().coords))
+        out.append("D11*")
+        for mark in fiducials:
+            out.append(f"X{_gerber_xy(mark.x)}Y{_gerber_xy(mark.y)}D03*")
+        out.append("D10*")
+
+    strokes: dict[int, list] = {}      # replicates share their layers
+    regions: dict[int, list] = {}
+    for var in variants:
+        layer = layers_by_variant[var.index][layer_index]
+        if id(layer) not in strokes:
+            strokes[id(layer)] = order_paths(chain_paths(strokes_of(layer)))
+            if regions_of:
+                bead = printer.line_width
+                area = tidy_area(regions_of(layer), bead / 2.0)
+                regions[id(layer)] = region_contours(area)
+            else:
+                regions[id(layer)] = []
+        if not strokes[id(layer)] and not regions[id(layer)]:
+            continue
+        # Not "%": a viewer reads it as opening an extended command and skips
+        # everything up to the next one, losing every other electrode.
+        out.append(f"G04 {var.ident} {var.pattern} {var.density * 100:.1f} pct*")
+        for contour in regions[id(layer)]:
+            out.append("G36*")
+            for n, (_, piece) in enumerate(contour):
+                stroke([(x + var.dx, y + var.dy) for x, y in piece],
+                       start=n == 0, straighten=printer.line_width / 4.0)
+            out.append("G37*")
+        for line in strokes[id(layer)]:
+            pts = [(x + var.dx, y + var.dy) for x, y in line.coords]
+            if len(pts) >= 2:
+                stroke(pts)
+    out.append("M02*")
+    return "\n".join(out) + "\n"
+
+
+# --------------------------------------------------------------------------
 # manifest
 # --------------------------------------------------------------------------
 
 
 def build_manifest(source, loaded: LoadedMesh, printer, config, layout_cfg,
-                   variants, layers_by_variant, layer_plan, style) -> dict:
+                   variants, layers_by_variant, layer_plan, style, fiducials=()) -> dict:
     """A record of what is on the plate and what each electrode measured."""
     manifest = {
         "source": str(source),
@@ -329,8 +502,20 @@ def build_manifest(source, loaded: LoadedMesh, printer, config, layout_cfg,
             "calibrated": config.calibrate,
             "density_metric": config.density_metric,
             "tolerance": config.tolerance,
+            # The volumes the sweep was confined to, in the model's own frame.
+            "modifiers": [
+                {"shape": m.shape, "center_mm": list(m.center), "size_mm": list(m.size)}
+                for m in config.modifiers
+            ],
+            "outside_modifiers": config.outside if config.modifiers else None,
         },
         "layout": {"mode": layout_cfg.mode, "gap_mm": layout_cfg.gap},
+        # In plate coordinates, Gerber's frame (Y towards the back).
+        "fiducials": [
+            {"x_mm": round(f.x, 4), "y_mm": round(f.y, 4), "diameter_mm": f.diameter,
+             "dot_mm": f.dot}
+            for f in fiducials
+        ],
         "svg_mode": style.mode,
         "layers": [{"index": i, "slice_z_mm": z, "top_z_mm": t}
                    for i, (z, t) in enumerate(layer_plan)],

@@ -139,6 +139,9 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--labels", action=argparse.BooleanOptionalAction, default=True,
                    help="add labels in a separate non-print group")
     g.add_argument("--label-size", type=float, default=1.6, help="label font size in mm")
+    g.add_argument("--fiducials", action=argparse.BooleanOptionalAction, default=True,
+                   help="print three alignment marks round the electrodes, the same "
+                        "in every layer, to register each print on the first")
     g.add_argument("--plate-outline", action=argparse.BooleanOptionalAction, default=True,
                    help="draw the plate border in a separate non-print group")
     g.add_argument("--split-layers", action="store_true",
@@ -315,7 +318,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     layout_config = LayoutConfig(
         mode=args.layout, gap=args.gap, columns=args.columns,
-        labels=args.labels, label_size=args.label_size,
+        labels=args.labels, label_size=args.label_size, fiducials=args.fiducials,
     )
     style = SvgStyle(
         mode=args.svg_mode, labels=args.labels, label_size=args.label_size,

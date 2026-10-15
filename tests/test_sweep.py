@@ -5,9 +5,10 @@ from __future__ import annotations
 import pytest
 
 from electrode_slicer import SweepRequest, run_sweep
+from electrode_slicer.geometry import as_polygons
 from electrode_slicer.io import SvgStyle, load_mesh
 from electrode_slicer.layout import LayoutConfig
-from electrode_slicer.slicer import SliceConfig
+from electrode_slicer.slicer import Modifier, SliceConfig
 
 pytestmark = pytest.mark.usefixtures("electrode")
 
@@ -230,6 +231,33 @@ def test_a_changed_setting_is_not_served_from_the_cache(electrode, printer):
     assert two.svg() != four.svg()
 
 
+def test_asking_for_flexibility_is_not_served_from_a_cache_without_it(electrode, printer):
+    """The analysis is attached to the layer, so a layer built without it
+    cannot stand in for one built with it."""
+    scales, layers = {}, {}
+    plain = sweep(electrode, printer, patterns=("grid",), densities=(0.4,), reference=0,
+                  scale_cache=scales, layer_cache=layers)
+    assert not plain.layers_by_variant[0][-1].flex.solved
+    analysed = sweep(electrode, printer, patterns=("grid",), densities=(0.4,), reference=0,
+                     config=SliceConfig(flexibility=True),
+                     scale_cache=scales, layer_cache=layers)
+    assert analysed.layers_by_variant[0][-1].flex.solved
+
+
+def test_the_stitch_ratio_is_part_of_the_cache_key(electrode, printer):
+    scales, layers = {}, {}
+    tight = sweep(electrode, printer, patterns=("stitched",), densities=(0.6,), reference=0,
+                  config=SliceConfig(stitch_ratio=2.0),
+                  scale_cache=scales, layer_cache=layers)
+    loose = sweep(electrode, printer, patterns=("stitched",), densities=(0.6,), reference=0,
+                  config=SliceConfig(stitch_ratio=16.0),
+                  scale_cache=scales, layer_cache=layers)
+    assert tight.svg() != loose.svg()
+    tight_x = sum(lp.overlap.crossings for lp in tight.layers_by_variant[0])
+    loose_x = sum(lp.overlap.crossings for lp in loose.layers_by_variant[0])
+    assert tight_x > loose_x
+
+
 def test_presentation_changes_reuse_the_built_geometry(electrode, printer):
     scales, layers = {}, {}
     sweep(electrode, printer, scale_cache=scales, layer_cache=layers)
@@ -238,3 +266,126 @@ def test_presentation_changes_reuse_the_built_geometry(electrode, printer):
           layout_config=LayoutConfig(mode="pack"),
           scale_cache=scales, layer_cache=layers)
     assert len(layers) == before, "nothing geometric changed, so nothing was rebuilt"
+
+
+# --------------------------------------------------------------------------
+# Gerber export
+# --------------------------------------------------------------------------
+
+
+def test_every_layer_becomes_one_gerber_file(electrode, printer):
+    result = sweep(electrode, printer)
+    files = result.gerbers()
+    assert len(files) == result.n_layers
+    for text in files:
+        assert "%FSLAX46Y46*%" in text and "%MOMM*%" in text
+        assert "%TF.FileFunction,Copper,L1,Top*%" in text
+        assert text.rstrip().endswith("M02*")
+
+
+def test_the_gerber_aperture_is_the_bead(electrode, printer):
+    text = sweep(electrode, printer).gerbers()[0]
+    assert f"%ADD10C,{printer.line_width:g}*%" in text
+
+
+def test_gerber_coordinates_stay_on_the_plate(electrode, printer):
+    import re
+    text = sweep(electrode, printer).gerbers()[0]
+    points = [(int(x) / 1e6, int(y) / 1e6)
+              for x, y in re.findall(r"X(-?\d+)Y(-?\d+)D0[12]\*", text)]
+    assert points
+    assert all(0 <= x <= printer.plate_x and 0 <= y <= printer.plate_y for x, y in points)
+
+
+def test_a_filename_cannot_break_the_gerber_syntax(electrode, printer):
+    text = sweep(electrode, printer).gerbers(title="bad*name%")[0]
+    assert text.splitlines()[0].count("*") == 1
+    assert "%" not in text.splitlines()[0]
+
+
+def _drawn(text):
+    """Strokes and total drawn length of a Gerber layer, arcs included."""
+    import math
+    import re
+    strokes, drawn, here, mode = 0, 0.0, None, "G01"
+    for line in text.splitlines():
+        if line in ("G01*", "G02*", "G03*"):
+            mode = line[:3]
+            continue
+        m = re.fullmatch(r"X(-?\d+)Y(-?\d+)(?:I(-?\d+)J(-?\d+))?D0([12])\*", line)
+        if not m:
+            continue
+        point = (int(m[1]) / 1e6, int(m[2]) / 1e6)
+        if m[5] == "2":
+            strokes += 1
+        elif mode == "G01":
+            drawn += math.dist(here, point)
+        else:
+            centre = (here[0] + int(m[3]) / 1e6, here[1] + int(m[4]) / 1e6)
+            a0 = math.atan2(here[1] - centre[1], here[0] - centre[0])
+            a1 = math.atan2(point[1] - centre[1], point[0] - centre[0])
+            sweep = (a1 - a0) % (2 * math.pi)
+            if mode == "G02":
+                sweep = 2 * math.pi - sweep
+            drawn += sweep * math.dist(here, centre)
+        here = point
+    return strokes, drawn
+
+
+def test_the_gerber_joins_fragments_but_draws_the_same_length(electrode, printer):
+    result = sweep(electrode, printer, patterns=("honeycomb",), densities=(0.4,), reference=0,
+                   layout_config=LayoutConfig(fiducials=False))
+    layer = result.layers_by_variant[0][0]
+    strokes, drawn = _drawn(result.gerbers()[0])
+    assert strokes < len(layer.all_paths) / 2
+    # Arcs follow the true curve the chords cut across, so a touch longer.
+    assert drawn == pytest.approx(layer.length, rel=2e-3)
+
+
+def test_a_perimeter_is_written_as_a_few_arcs(electrode, printer):
+    result = sweep(electrode, printer, patterns=("lines",), densities=(0.4,), reference=0,
+                   layout_config=LayoutConfig(fiducials=False))
+    text = result.gerbers()[0]
+    ring = result.layers_by_variant[0][0].perimeters[0]
+    arcs = sum(1 for line in text.splitlines() if "I" in line and line.endswith("D01*"))
+    assert "G75*" in text
+    assert 2 <= arcs < len(ring.coords) / 5
+    assert _drawn(text)[1] == pytest.approx(result.layers_by_variant[0][0].length, rel=2e-3)
+
+
+def test_the_walls_pass_is_the_area_to_fill_not_the_strokes(electrode, printer):
+    # A modifier smaller than the part leaves a solid band whose hatch ends,
+    # drawn as strokes, gave the NOVA a sawtooth edge and pinholes to fill
+    # round.  The walls pass is the area itself, edge clean.
+    w, d, h = electrode.extents
+    cut = Modifier("box", (w / 2, d / 2, h / 2), (w / 2, d / 2, 2 * h))
+    result = sweep(electrode, printer, patterns=("lines",), densities=(0.4,), reference=0,
+                   config=SliceConfig(modifiers=(cut,)),
+                   layout_config=LayoutConfig(fiducials=False))
+    layer = result.layers_by_variant[0][0]
+    files = result.gerber_passes()
+    walls = files[0][3].splitlines()
+    assert files[0][2] == "walls"
+    assert walls.count("G36*") == walls.count("G37*") == len(as_polygons(layer.walls_area))
+    # Nothing is drawn outside a region: no stroke starts after the last G37.
+    last = max(i for i, line in enumerate(walls) if line == "G37*")
+    assert not any(line.endswith("D02*") for line in walls[last:])
+    # The band covers the slice less what the pattern fills.
+    assert layer.walls_area.area == pytest.approx(layer.slice_area - layer.region_area, rel=1e-6)
+    # Written as plainly as a copper pour: arcs where the outline is a circle,
+    # and not every facet of the mesh anywhere else.
+    start = walls.index("G36*")
+    assert any("I" in line for line in walls[start:])
+    drawn = sum(line.endswith("D01*") for line in walls[start:])
+    facets = sum(len(p.exterior.coords) + sum(len(r.coords) for r in p.interiors)
+                 for p in as_polygons(layer.walls_area))
+    assert drawn < facets / 2
+    # The infill passes still draw strokes, and no regions.
+    assert all("G36*" not in text for _, _, role, text in files if role == "infill")
+
+
+def test_a_solid_pad_hands_over_its_whole_outline(electrode, printer):
+    result = sweep(electrode, printer, patterns=("lines",), densities=(0.4,), reference=1)
+    pad = next(per[0] for var, per in zip(result.variants, result.layers_by_variant, strict=True)
+               if var.is_reference)
+    assert pad.walls_area.area == pytest.approx(pad.slice_area)

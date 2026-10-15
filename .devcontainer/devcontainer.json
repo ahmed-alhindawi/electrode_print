@@ -1,5 +1,5 @@
 {
-    "name": "omt-placement",
+    "name": "electrode_design",
     "build": {
         "context": "..",
         "dockerfile": "Dockerfile",

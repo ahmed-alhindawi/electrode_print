@@ -2,16 +2,24 @@
 
 from __future__ import annotations
 
+import math
+
 import pytest
 from shapely.geometry import GeometryCollection, LineString, MultiLineString, Point, box
 
 from electrode_slicer.geometry import (
     as_linestrings,
     as_polygons,
+    chain_paths,
+    connect_along_boundary,
     extend_ends,
+    fit_arcs,
     hatch,
+    order_paths,
+    region_contours,
     ring_lines,
     simplify_paths,
+    tidy_area,
     toolpath_area,
 )
 
@@ -120,3 +128,159 @@ def test_simplify_keeps_rings_closed():
 def test_simplify_zero_is_a_no_op():
     line = LineString([(0, 0), (1, 0.0001), (2, 0)])
     assert simplify_paths([line], 0.0)[0].equals(line)
+
+
+# --------------------------------------------------------------------------
+# joining paths into continuous strokes
+# --------------------------------------------------------------------------
+
+
+def _segments(lines):
+    """Every segment, direction ignored, to compare what gets drawn."""
+    out = []
+    for ln in lines:
+        for a, b in zip(ln.coords, ln.coords[1:], strict=False):
+            out.append(tuple(sorted((tuple(round(v, 6) for v in a),
+                                     tuple(round(v, 6) for v in b)))))
+    return sorted(out)
+
+
+def test_paths_that_meet_end_to_end_become_one_stroke():
+    pieces = [LineString([(0, 0), (1, 0)]), LineString([(2, 0), (1, 0)]),
+              LineString([(2, 0), (2, 1)])]
+    chained = chain_paths(pieces)
+    assert len(chained) == 1
+    assert _segments(chained) == _segments(pieces)
+
+
+def test_a_loop_of_pieces_closes_into_a_ring():
+    pieces = [LineString([(0, 0), (1, 0)]), LineString([(1, 0), (0, 1)]),
+              LineString([(0, 1), (0, 0)])]
+    (ring,) = chain_paths(pieces)
+    assert ring.is_ring
+
+
+def test_a_junction_needs_one_stroke_per_pair_of_odd_ends():
+    # A T: three ends of degree one and a node of degree three.
+    pieces = [LineString([(0, 0), (1, 0)]), LineString([(1, 0), (2, 0)]),
+              LineString([(1, 0), (1, 1)])]
+    chained = chain_paths(pieces)
+    assert len(chained) == 2
+    assert _segments(chained) == _segments(pieces)
+
+
+def test_paths_that_do_not_touch_are_left_apart():
+    pieces = [LineString([(0, 0), (1, 0)]), LineString([(1.01, 0), (2, 0)])]
+    assert len(chain_paths(pieces)) == 2
+
+
+def test_chaining_draws_a_honeycomb_in_fewer_strokes_without_changing_it(electrode, printer):
+    from electrode_slicer.slicer import Slicer
+    slicer = Slicer(printer)
+    plan = slicer.layer_plan(electrode.height)
+    zs = [z for z, _ in plan]
+    layer = slicer.build(slicer.sections(electrode.mesh, zs), zs, "honeycomb", 0.4)[0]
+    chained = chain_paths(layer.all_paths)
+    assert len(chained) < len(layer.all_paths) / 2
+    assert _segments(chained) == _segments(layer.all_paths)
+
+
+def test_ordering_starts_each_path_near_where_the_last_one_ended():
+    far, near = LineString([(10, 0), (11, 0)]), LineString([(2, 0), (1.5, 0)])
+    ordered = order_paths([LineString([(0, 0), (1, 0)]), far, near])
+    assert list(ordered[1].coords) == [(1.5, 0), (2, 0)]      # reversed to start close by
+    assert ordered[2].equals(far)
+
+
+def _stitched(contour):
+    """A contour's pieces joined into one closed ring of points."""
+    pts = [contour[0][1][0]]
+    for _, piece in contour:
+        assert piece[0] == pts[-1]          # each piece starts where the last ended
+        pts += piece[1:]
+    assert pts[0] == pts[-1]
+    return pts
+
+
+def _signed_area(pts):
+    return 0.5 * sum(x0 * y1 - x1 * y0 for (x0, y0), (x1, y1) in zip(pts, pts[1:], strict=False))
+
+
+def test_a_region_with_holes_is_one_contour_whose_bridges_enclose_nothing():
+    area = box(0, 0, 10, 4).difference(Point(2, 2).buffer(1)).difference(Point(6, 2).buffer(1))
+    (contour,) = region_contours(area)
+    assert sum(kind == "bridge" for kind, _ in contour) == 4
+    assert _signed_area(_stitched(contour)) == pytest.approx(area.area)
+
+
+def test_a_cut_in_bridge_retraces_itself_exactly():
+    ring = Point(0, 0).buffer(4).difference(Point(0, 0).buffer(3.5))
+    bridges = [p for kind, p in region_contours(ring)[0] if kind == "bridge"]
+    assert bridges[1] == bridges[0][::-1]
+
+
+def test_an_island_in_a_hole_is_its_own_contour():
+    frame = box(0, 0, 10, 4).difference(box(1, 1, 9, 3))
+    contours = region_contours(frame.union(box(2, 1.5, 8, 2.5)))
+    assert len(contours) == 2
+    assert sum(_signed_area(_stitched(c)) for c in contours) == pytest.approx(24.0 + 6.0)
+
+
+def test_tidying_drops_slivers_and_notches_finer_than_the_feature():
+    band = box(0, 0, 4, 1)
+    sliver = box(4, 0.45, 6, 0.47)               # 20 um wide spur
+    notch = box(2, 0.9, 2.02, 1)                  # 20 um wide slot
+    tidy = tidy_area(band.union(sliver).difference(notch), 0.05)
+    assert tidy.bounds[2] == pytest.approx(4, abs=0.05)   # the spur is gone
+    assert tidy.area == pytest.approx(4, rel=1e-3)
+
+
+def test_tidying_keeps_a_band_one_bead_wide():
+    ring = Point(0, 0).buffer(4).difference(Point(0, 0).buffer(3.9))
+    assert tidy_area(ring, 0.05).area == pytest.approx(ring.area, rel=1e-2)
+
+
+def test_straightening_thins_the_lines_but_keeps_the_arcs():
+    # A half circle of fine chords, then a wobbly straight tail.
+    arc = [(math.cos(math.pi * i / 64), math.sin(math.pi * i / 64)) for i in range(65)]
+    tail = [(-1 - 0.01 * i, 0.002 * (i % 2)) for i in range(1, 41)]
+    moves = fit_arcs(arc + tail, 0.005, straighten=0.025)
+    assert [m[0] for m in moves].count("arc") >= 1
+    assert sum(m[0] == "line" for m in moves) == 1
+    assert moves[-1][1] == tail[-1]
+
+
+def test_pieces_a_clip_cut_apart_are_rejoined_along_the_edge():
+    # A zigzag clipped by a disc comes apart wherever it runs outside.
+    disc = Point(0, 0).buffer(1, quad_segs=32)
+    zigzag = LineString([(-2, y) if i % 2 else (2, y)
+                         for i, y in enumerate([-0.8 + 0.2 * k for k in range(9)])])
+    pieces = as_linestrings(disc.intersection(zigzag))
+    assert len(pieces) > 4
+    joined = connect_along_boundary(pieces, disc, along=zigzag)
+    assert len(joined) == 1
+    # Nothing is lost, and the connectors only add length along the edge.
+    assert joined[0].length > sum(p.length for p in pieces)
+    assert disc.buffer(1e-6).covers(joined[0])
+
+
+def test_rejoined_strokes_neither_cross_nor_touch_one_another():
+    from electrode_slicer.patterns import FillContext, get_pattern
+
+    disc = Point(4, 4).buffer(3.5, quad_segs=64)
+    ctx = FillContext(region=disc, scale=0.23, angle_deg=45.0, z=0.05, line_width=0.1)
+    pattern = get_pattern("hilbert")
+    paths = pattern.generate(ctx)
+    clipped = as_linestrings(disc.intersection(LineString(
+        [p for ln in paths for p in ln.coords])))   # a stand-in count of raw pieces
+    assert len(paths) <= 8 < len(clipped)
+    for i, a in enumerate(paths):
+        assert a.is_simple
+        for b in paths[i + 1:]:
+            assert not a.intersects(b)
+
+
+def test_joins_respect_the_longest_allowed_gap():
+    disc = Point(0, 0).buffer(1, quad_segs=32)
+    pieces = [LineString([(-1, 0), (1, 0)]), LineString([(0, -1), (0, -0.5)])]
+    assert len(connect_along_boundary(pieces, disc, max_gap=0.1)) == 2

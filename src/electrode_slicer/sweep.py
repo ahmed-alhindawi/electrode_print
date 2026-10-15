@@ -11,8 +11,10 @@ from pathlib import Path
 
 from shapely import affinity
 
-from .io import LoadedMesh, SvgStyle, build_manifest, build_svg
+from .fiducials import Fiducial, place_fiducials
+from .io import LoadedMesh, SvgStyle, build_gerber, build_manifest, build_svg
 from .layout import Grid, LayoutConfig, Variant, build_variants, layout
+from .passes import print_passes
 from .patterns import get_pattern
 from .printer import Printer
 from .slicer import LayerPaths, SliceConfig, Slicer
@@ -55,6 +57,7 @@ class SweepResult:
     layout_config: LayoutConfig
     style: SvgStyle
     warnings: list[str] = field(default_factory=list)
+    fiducials: list[Fiducial] = field(default_factory=list)
 
     @property
     def layer_zs(self) -> list[float]:
@@ -79,12 +82,66 @@ class SweepResult:
         return build_svg(
             self.printer, self.variants, self.layers_by_variant, self.layer_zs,
             self.style, self.loaded.width, self.grid, only_layer, title,
+            fiducials=self.fiducials,
         )
+
+    def gerbers(self, title: str = "electrodes") -> list[str]:
+        """One Gerber top-copper file per print layer, bottom layer first."""
+        return [
+            build_gerber(self.printer, self.variants, self.layers_by_variant, idx, z, title,
+                         fiducials=self.fiducials)
+            for idx, z in enumerate(self.layer_zs)
+        ]
+
+    def gerber_passes(self, title: str = "electrodes") -> list[tuple[int, int, str, str]]:
+        """Gerber split into print passes no region slicer can misread.
+
+        Returns ``(layer, pass, role, text)`` in print order: for each layer
+        the walls first, then each infill pass.  Every file holds every
+        electrode's share of that pass; an electrode needing fewer passes is
+        simply absent from the later ones.
+        """
+        width = self.printer.line_width
+        out = []
+        for idx, z in enumerate(self.layer_zs):
+            split: dict[int, list] = {}           # replicates share their layers
+            for var in self.variants:
+                layer = self.layers_by_variant[var.index][idx]
+                if id(layer) not in split:
+                    split[id(layer)] = print_passes(layer, width)
+            # Line every electrode's walls up in the first file, whether or not
+            # it has any, so pass 1 is always the walls.
+            aligned = {
+                key: (passes if passes and passes[0][0] == "walls" else [("walls", [])] + passes)
+                for key, passes in split.items()
+            }
+            count = max((len(p) for p in aligned.values()), default=0)
+            for k in range(count):
+                role = "walls" if k == 0 else "infill"
+
+                def strokes_of(layer, k=k, aligned=aligned):
+                    passes = aligned[id(layer)]
+                    return passes[k][1] if k < len(passes) else []
+
+                # The walls go down as the area they cover, not as the strokes
+                # that cover it: the NOVA fills that area its own way either
+                # way, and only the area itself has a clean edge to fill to.
+                walls = k == 0
+                text = build_gerber(
+                    self.printer, self.variants, self.layers_by_variant, idx, z, title,
+                    strokes_of=(lambda layer: []) if walls else strokes_of,
+                    regions_of=(lambda layer: layer.walls_area) if walls else None,
+                    label=f"pass {k + 1} of {count} ({role})",
+                    fiducials=self.fiducials,
+                )
+                out.append((idx, k + 1, role, text))
+        return out
 
     def manifest(self, source: str | Path = "") -> dict:
         return build_manifest(
             source, self.loaded, self.printer, self.config, self.layout_config,
             self.variants, self.layers_by_variant, self.layer_plan, self.style,
+            fiducials=self.fiducials,
         )
 
 
@@ -134,6 +191,10 @@ def run_sweep(
         request.patterns, request.densities, request.replicates, request.reference
     )
     grid = layout(variants, (part_w, part_d), printer, layout_config, request.replicates)
+    fiducials: list[Fiducial] = []
+    if layout_config.fiducials:
+        fiducials, notes = place_fiducials(variants, (part_w, part_d), printer)
+        warnings.extend(notes)
 
     # Everything that decides what a layer's toolpaths look like.  Built
     # layers are immutable once returned, so they are safe to hand out to
@@ -143,7 +204,7 @@ def run_sweep(
         config.perimeters, config.infill_angle, config.infill_overlap,
         config.alternate_angles, config.solid_layers, config.calibrate,
         config.density_metric, config.tolerance, config.tpms_resolution,
-        config.stitch_ratio,
+        config.stitch_ratio, config.flexibility, config.modifiers, config.outside,
         tuple(round(z, 9) for z in zs),
         tuple(hash(s.wkb) for s in slices),
     )
@@ -177,6 +238,7 @@ def run_sweep(
         variants=variants, layers_by_variant=layers_by_variant, layer_plan=plan,
         grid=grid, loaded=loaded, printer=printer, config=config,
         layout_config=layout_config, style=style, warnings=warnings,
+        fiducials=fiducials,
     )
 
 

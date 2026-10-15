@@ -30,7 +30,7 @@ NASTY = [None, "", "   ", "abc", [], {}, True, -1, 0, 1.5, 1e9, -1e9, "NaN"]
 def stl_b64():
     from tests.conftest import STL
     if not STL.exists():
-        pytest.skip("model/electrode.stl not present")
+        pytest.skip("model/electrode_6mm.stl not present")
     return base64.b64encode(STL.read_bytes()).decode()
 
 
@@ -233,7 +233,7 @@ def test_the_first_load_defaults_span_the_crossing_axis(service):
     classes = {p["name"]: p["overlap"] for p in service.patterns()["patterns"]}
     spanned = {classes[name] for name in defaults["patterns"]}
     assert "none" in spanned and "crossing" in spanned
-    assert defaults["densities"] == [20, 40, 60, 80]
+    assert defaults["densities"] == [10, 15, 20, 25]
 
 
 def test_a_combinatorial_explosion_is_refused_before_it_starts(service, stl_b64):

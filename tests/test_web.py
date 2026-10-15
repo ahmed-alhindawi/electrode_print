@@ -7,10 +7,14 @@ collide with a copy the user happens to be running.
 from __future__ import annotations
 
 import base64
+import http.client
+import io
 import json
+import socket
 import threading
 import urllib.error
 import urllib.request
+import zipfile
 
 import pytest
 
@@ -21,7 +25,7 @@ from electrode_slicer.web import SliceService, serve
 def stl_b64():
     from tests.conftest import STL
     if not STL.exists():
-        pytest.skip("model/electrode.stl not present")
+        pytest.skip("model/electrode_6mm.stl not present")
     return base64.b64encode(STL.read_bytes()).decode()
 
 
@@ -390,6 +394,64 @@ def test_an_empty_post_is_refused(server):
         assert exc.code == 400
 
 
+def connect(base):
+    host, port = base.removeprefix("http://").split(":")
+    return http.client.HTTPConnection(host, int(port), timeout=60)
+
+
+def test_the_connection_stays_open_after_a_response(server):
+    # VS Code forwards a dev container's port through a relay that exits as
+    # soon as the server hangs up, dropping whatever it has not passed on; a
+    # page served on a connection the server closes can arrive cut short.
+    conn = connect(server)
+    try:
+        conn.request("GET", "/")
+        page = conn.getresponse()
+        body = page.read()
+        assert page.status == 200 and not page.will_close
+        assert len(body) == int(page.getheader("Content-Length"))
+        sock = conn.sock
+
+        # A refusal after the body has been read leaves the connection usable.
+        conn.request("POST", "/api/slice", body=b'"just a string"',
+                     headers={"Content-Type": "application/json"})
+        refused = conn.getresponse()
+        refused.read()
+        assert refused.status == 400 and not refused.will_close
+
+        conn.request("GET", "/api/health")
+        health = conn.getresponse()
+        assert json.loads(health.read()) == {"ok": True}
+        assert conn.sock is sock
+    finally:
+        conn.close()
+
+
+def test_a_post_refused_unread_ends_the_connection(server):
+    # Kept alive, the unread body would be parsed as the next request.
+    conn = connect(server)
+    try:
+        conn.request("POST", "/api/nope", body=b'{"stl": "x"}',
+                     headers={"Content-Type": "application/json"})
+        response = conn.getresponse()
+        assert json.loads(response.read())["error"] == "not found"
+        assert response.status == 404 and response.will_close
+    finally:
+        conn.close()
+
+
+def test_an_oversized_upload_is_refused_without_waiting_for_it(server):
+    host, port = server.removeprefix("http://").split(":")
+    with socket.create_connection((host, int(port)), timeout=30) as sock:
+        sock.sendall(b"POST /api/slice HTTP/1.1\r\nHost: x\r\n"
+                     b"Content-Length: 999999999999\r\n\r\n")
+        reply = b""
+        while chunk := sock.recv(65536):     # the server hangs up after replying
+            reply += chunk
+    assert reply.startswith(b"HTTP/1.1 413")
+    assert b"Connection: close" in reply
+
+
 def test_detail_over_http(server, stl_b64):
     status, body, _ = call(server, "/api/detail", {
         "stl": stl_b64, "patterns": ["grid"], "densities": [40],
@@ -415,3 +477,136 @@ def test_a_part_that_will_not_fit_is_explained(server, stl_b64):
     })
     assert status == 400
     assert "Z travel" in json.loads(body)["error"]
+
+
+def test_gerber_export_zips_one_gtl_per_layer(server, stl_b64):
+    status, body, kind = call(server, "/api/gerber", {
+        "stl": stl_b64, "patterns": ["grid"], "densities": [40], "reference": 0,
+        "filename": "electrode.stl", "gtl_mode": "layers",
+    })
+    assert status == 200
+    assert kind == "application/zip"
+    names = zipfile.ZipFile(io.BytesIO(body)).namelist()
+    assert names == [f"electrode-layer_{i:03d}.GTL" for i in range(3)]
+
+
+def test_a_single_layer_part_exports_a_bare_gtl(service, stl_b64):
+    name, body, kind = service.gerber({
+        "stl": stl_b64, "patterns": ["lines"], "densities": [40], "reference": 0,
+        "layer_height": 1.0, "filename": "pad.stl", "gtl_mode": "layers",
+    })
+    assert name == "pad-plate.GTL"
+    assert kind == "application/vnd.gerber"
+    assert body.decode("ascii").rstrip().endswith("M02*")
+
+
+def test_every_electrode_reaches_the_gerber_outside_any_extended_command(service, stl_b64):
+    # A stray "%" opens an extended command, and a viewer then skips every
+    # electrode up to the next one.
+    _, body, _ = service.gerber({
+        "stl": stl_b64, "patterns": ["lines", "grid"], "densities": [20, 60],
+        "reference": 1, "layer_height": 1.0, "gtl_mode": "layers", "fiducials": False,
+    })
+    lines = body.decode("ascii").splitlines()
+    assert all(ln.startswith("%") and ln.endswith("*%") for ln in lines if "%" in ln)
+    assert sum(ln.startswith("G04 ") for ln in lines) == 1 + 5
+
+
+def test_the_mesh_comes_back_in_the_frame_modifiers_are_placed_in(service, stl_b64):
+    import numpy as np
+    data = service.mesh({"stl": stl_b64})
+    vertices = np.frombuffer(base64.b64decode(data["vertices"]), "<f4").reshape(-1, 3)
+    faces = np.frombuffer(base64.b64decode(data["faces"]), "<u4").reshape(-1, 3)
+    assert vertices.min(axis=0) == pytest.approx([0, 0, 0], abs=1e-4)
+    assert vertices.max(axis=0) == pytest.approx(data["extents"], abs=1e-3)
+    assert faces.max() < len(vertices)
+
+
+def test_a_modifier_confines_the_sweep_to_the_electrode_face(service, stl_b64):
+    # The electrode is a 5 mm disc at the origin with its probe tab running
+    # off to +x on the first layer only.
+    base = {"stl": stl_b64, "patterns": ["lines"], "densities": [20], "reference": 0}
+    disc = {"shape": "cylinder", "center": [2.5, 2.5, 0.15], "size": [5, 5, 0.4]}
+    whole = service.detail({**base, "variant": "lines_20pct"})
+    split = service.detail({**base, "variant": "lines_20pct", "modifiers": [disc]})
+    assert not any(layer["solid"] for layer in whole["layers"])
+    tab = split["layers"][0]
+    assert tab["solid"]
+    assert min(x for path in tab["solid"] for x, _ in path) > 4.5
+    assert max(x for path in tab["infill"] for x, _ in path) < 5.0 + split["line_width"]
+
+
+@pytest.mark.parametrize("bad", [
+    "nope", [{"shape": "cone", "center": [0, 0, 0], "size": [1, 1, 1]}],
+    [{"shape": "box", "center": [0, 0], "size": [1, 1, 1]}],
+    [{"shape": "box", "center": [0, 0, 0], "size": [1, -1, 1]}],
+])
+def test_a_bad_modifier_is_explained(server, stl_b64, bad):
+    status, body, _ = call(server, "/api/slice", {"stl": stl_b64, "modifiers": bad})
+    assert status == 400
+    assert "modifier" in json.loads(body)["error"]
+
+
+def test_gerber_passes_put_the_walls_first_then_crossing_free_infill(service, stl_b64):
+    _, body, kind = service.gerber({
+        "stl": stl_b64, "patterns": ["grid"], "densities": [40], "reference": 0,
+        "filename": "electrode.stl",
+    })
+    names = sorted(zipfile.ZipFile(io.BytesIO(body)).namelist())
+    assert kind == "application/zip"
+    assert names[0] == "electrode-layer_000-pass_1-walls.GTL"
+    # A grid's two families cross, so they cannot share a pass.
+    assert "electrode-layer_000-pass_3-infill.GTL" in names
+
+
+def test_gerber_can_still_be_written_one_file_per_layer(service, stl_b64):
+    _, body, _ = service.gerber({
+        "stl": stl_b64, "patterns": ["grid"], "densities": [40], "reference": 0,
+        "filename": "electrode.stl", "gtl_mode": "layers",
+    })
+    names = zipfile.ZipFile(io.BytesIO(body)).namelist()
+    assert names == [f"electrode-layer_{i:03d}.GTL" for i in range(3)]
+
+
+def test_an_unknown_gtl_mode_is_refused(service, stl_b64):
+    with pytest.raises(ValueError, match="gtl_mode"):
+        service.gerber({"stl": stl_b64, "gtl_mode": "both"})
+
+
+def test_a_rejected_gerber_export_explains_itself(server, stl_b64):
+    status, body, _ = call(server, "/api/gerber", {"stl": stl_b64, "patterns": ["nope"]})
+    assert status == 400
+    assert "unknown infill pattern" in json.loads(body)["error"]
+
+
+def test_toolpaths_predict_each_pass_filled_by_the_tip(service, stl_b64):
+    payload = {"stl": stl_b64, "patterns": ["grid"], "densities": [40], "reference": 0}
+    out = service.toolpaths({**payload, "variant": "grid_40pct", "layer": 1})
+    assert out["layer"] == 1 and out["tip_um"] == 100
+    roles = [p["role"] for p in out["passes"]]
+    assert roles[0] == "walls" and roles.count("infill") >= 2
+    for p in out["passes"]:
+        assert p["artwork"] and p["loops"] and len(p["single"]) == len(p["loops"])
+        assert p["gap_pct"] < 5, "a 100 um tip prints 100 um beads"
+
+
+def test_a_tip_too_wide_for_the_beads_shows_as_gaps(service, stl_b64):
+    payload = {"stl": stl_b64, "patterns": ["lines"], "densities": [40], "reference": 0}
+    out = service.toolpaths({**payload, "variant": "lines_40pct", "tip_um": 150})
+    assert out["passes"][1]["gap_pct"] > 90
+
+
+@pytest.mark.parametrize("bad", [{"layer": 99}, {"tip_um": 0}, {"variant": "nope"}])
+def test_a_bad_toolpaths_request_is_explained(service, stl_b64, bad):
+    payload = {"stl": stl_b64, "patterns": ["lines"], "densities": [40], "reference": 0,
+               "variant": "lines_40pct", **bad}
+    with pytest.raises(ValueError):
+        service.toolpaths(payload)
+
+
+def test_the_toolpaths_route_is_served(server, stl_b64):
+    status, body, _ = call(server, "/api/toolpaths", {
+        "stl": stl_b64, "patterns": ["lines"], "densities": [40], "reference": 0,
+        "variant": "lines_40pct"})
+    assert status == 200
+    assert json.loads(body)["passes"]

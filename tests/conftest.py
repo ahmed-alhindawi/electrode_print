@@ -15,15 +15,15 @@ from electrode_slicer import Printer, SliceConfig, Slicer, load_mesh
 from electrode_slicer.layout import LayoutConfig
 
 ROOT = Path(__file__).resolve().parents[1]
-STL = ROOT / "model" / "electrode.stl"
+STL = ROOT / "model" / "electrode_6mm.stl"
 
-needs_model = pytest.mark.skipif(not STL.exists(), reason="model/electrode.stl not present")
+needs_model = pytest.mark.skipif(not STL.exists(), reason="model/electrode_6mm.stl not present")
 
 
 @pytest.fixture(scope="session")
 def stl_path() -> Path:
     if not STL.exists():
-        pytest.skip("model/electrode.stl not present")
+        pytest.skip("model/electrode_6mm.stl not present")
     return STL
 
 

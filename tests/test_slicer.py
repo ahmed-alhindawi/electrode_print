@@ -6,7 +6,7 @@ import pytest
 from shapely.geometry import box
 
 from electrode_slicer.patterns import get_pattern
-from electrode_slicer.slicer import SliceConfig, Slicer, coverage, layer_heights
+from electrode_slicer.slicer import Modifier, SliceConfig, Slicer, coverage, layer_heights
 
 PATTERNS = ["lines", "grid", "triangles", "stars", "honeycomb", "gyroid",
             "serpentine", "hilbert"]
@@ -105,6 +105,22 @@ def test_calibration_hits_the_requested_density(name, target, printer, square):
     slicer = Slicer(printer.with_overrides(line_width=0.4), SliceConfig())
     scale, achieved = slicer.solve_scale(get_pattern(name), square, target, 0.0, 0.0)
     assert scale > 0
+    # Hilbert's coverage steps as the cell size moves where the clip cuts the
+    # curve, and its pieces are rejoined along the edge; on a grid this coarse
+    # (25 beads across) one join is a few percent of the ink, so a target can
+    # fall in a step.  At real scale it is held to 1% below.
+    tolerance = 0.025 if name == "hilbert" else 0.01
+    assert achieved == pytest.approx(target, abs=tolerance)
+
+
+@pytest.mark.parametrize("target", [0.1, 0.2, 0.4, 0.6, 0.8])
+def test_hilbert_calibrates_at_the_scale_it_is_printed(printer, target):
+    """A 7 mm sensing face in 100 um beads: the size the NOVA actually prints."""
+    from shapely.geometry import Point
+
+    slicer = Slicer(printer.with_overrides(line_width=0.1), SliceConfig())
+    face = Point(4, 4).buffer(3.5, quad_segs=64)
+    _, achieved = slicer.solve_scale(get_pattern("hilbert"), face, target, 45.0, 0.0)
     assert achieved == pytest.approx(target, abs=0.01)
 
 
@@ -236,3 +252,66 @@ def test_solid_layers_override_the_skin_only(printer, square):
     assert [lp.pattern for lp in layers] == ["solid", "grid", "grid", "solid"]
     assert layers[0].density_target == 1.0
     assert layers[1].density_target == pytest.approx(0.3)
+
+
+# --------------------------------------------------------------------------
+# modifiers: sweeping only part of the model
+# --------------------------------------------------------------------------
+
+
+def probe_and_pad():
+    """A 6 mm pad with a 6 mm probe running off its right-hand side."""
+    return box(0, 0, 6, 6).union(box(6, 2, 12, 4))
+
+
+PAD = Modifier("box", center=(3, 3, 0.15), size=(6, 6, 0.3))
+
+
+def test_outside_the_modifier_is_printed_solid(printer):
+    slicer = Slicer(printer, SliceConfig(modifiers=(PAD,)))
+    layer = slicer.build_layer(0, 0.05, probe_and_pad(), "lines", 0.2)
+    assert layer.solid and layer.infill
+    assert all(ln.bounds[0] >= 6 - printer.line_width for ln in layer.solid)
+    assert all(ln.bounds[2] <= 6 + printer.line_width for ln in layer.infill)
+
+
+def test_the_density_is_calibrated_on_the_modifier_alone(printer):
+    slicer = Slicer(printer, SliceConfig(modifiers=(PAD,)))
+    layer = slicer.build_layer(0, 0.05, probe_and_pad(), "lines", 0.2)
+    _, whole = Slicer(printer).walls(probe_and_pad())
+    assert layer.region_area < whole.area
+    assert layer.density_actual == pytest.approx(0.2, abs=0.01)
+
+
+def test_outside_the_modifier_can_be_left_out(printer):
+    slicer = Slicer(printer, SliceConfig(modifiers=(PAD,), outside="skip"))
+    layer = slicer.build_layer(0, 0.05, probe_and_pad(), "lines", 0.2)
+    assert not layer.solid
+    assert max(ln.bounds[2] for ln in layer.all_paths) <= 6
+    assert layer.slice_area == pytest.approx(36)
+
+
+def test_a_modifier_only_reaches_the_layers_it_spans(printer):
+    low = Modifier("box", center=(3, 3, 0.05), size=(6, 6, 0.1))
+    slicer = Slicer(printer, SliceConfig(modifiers=(low,)))
+    above = slicer.build_layer(1, 0.15, probe_and_pad(), "lines", 0.2)
+    assert not above.infill and above.solid
+
+
+def test_a_cylinder_modifier_is_round(printer):
+    disc = Modifier("cylinder", center=(3, 3, 0.15), size=(4, 4, 0.3))
+    assert disc.footprint(0.15).area == pytest.approx(3.14159 * 4, rel=0.01)
+    assert disc.footprint(0.5).is_empty
+
+
+@pytest.mark.parametrize("bad", [
+    {"shape": "sphere"}, {"size": (1, 0, 1)}, {"center": (0, float("nan"), 0)},
+])
+def test_a_nonsense_modifier_is_refused(bad):
+    with pytest.raises(ValueError):
+        Modifier(**bad)
+
+
+def test_an_unknown_outside_mode_is_refused():
+    with pytest.raises(ValueError):
+        SliceConfig(outside="hollow")

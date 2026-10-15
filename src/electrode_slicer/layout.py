@@ -92,6 +92,7 @@ class LayoutConfig:
     columns: int = 0              # pack mode only; 0 means fit as many as possible
     labels: bool = True
     label_size: float = 1.6
+    fiducials: bool = True        # alignment marks round the block, printed every pass
 
     def __post_init__(self) -> None:
         if self.mode not in ("matrix", "pack"):
@@ -145,13 +146,14 @@ def layout(variants: list[Variant], footprint, printer, cfg: LayoutConfig,
            replicates: int = 1) -> Grid:
     """Place each variant on the plate and work out the axis labels."""
     part_w, part_h = footprint
-    caption_room = (cfg.label_size * 1.8) if cfg.labels else 0.0
+    # Room for the pattern names down the left and the density headings along
+    # the top, so the plate can be read without the manifest.  With those
+    # headings the electrodes go uncaptioned; a packed plate has none, so
+    # each electrode keeps a caption of its own.
+    axes = cfg.labels and cfg.mode == "matrix"
+    caption_room = (cfg.label_size * 1.8) if cfg.labels and not axes else 0.0
     cell_w = part_w + cfg.gap
     cell_h = part_h + caption_room + cfg.gap
-
-    # Room for the pattern names down the left and the density headings along
-    # the top, so the plate can be read without the manifest.
-    axes = cfg.labels and cfg.mode == "matrix"
     longest = max((len(v.pattern) for v in variants), default=8)
     gutter = (max(longest, len("100% ref")) * cfg.label_size * 0.62) if axes else 0.0
     header = (cfg.label_size * 2.2) if axes else 0.0

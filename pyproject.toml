@@ -38,3 +38,8 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-q"
+
+[tool.ruff.lint.per-file-ignores]
+# A plotting script: the package import has to follow the sys.path setup, and
+# compact paired statements keep each figure readable as one block.
+"docs/make_figures.py" = ["E402", "E702", "I001", "B905"]

@@ -14,11 +14,13 @@
     --accent: #1f4e79;
     --infill: #c0392b;
     --hump: #e8a33d;
+    --solid: #8a96a3;
+    --model: #b8c0c8;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
       --bg: #1b1e23; --sunk: #16191d; --fg: #e8eaed; --muted: #949ca6; --line: #2d333b;
-      --accent: #6fa8dc; --infill: #e8705f; --hump: #f0b95d;
+      --accent: #6fa8dc; --infill: #e8705f; --hump: #f0b95d; --solid: #6b7682; --model: #5d6670;
     }
   }
   * { box-sizing: border-box; }
@@ -118,11 +120,39 @@
 
   .pane { flex: 1; min-height: 0; position: relative; display: none; }
   .pane.on { display: block; }
+  .mod { border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; margin-top: 6px;
+         background: var(--bg); cursor: pointer; }
+  .mod[aria-current="true"] { border-color: var(--hump); box-shadow: inset 3px 0 0 var(--hump); }
+  .mod .head { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
+  .mod .head b { font-weight: 600; flex: 1; }
+  .mod .head button { border: 0; background: none; color: var(--muted); cursor: pointer; padding: 0 2px; font-size: 14px; }
+  .mod .head button:hover { color: var(--infill); }
+  .mod .rows { grid-template-columns: 52px 1fr; margin-top: 4px; }
+  .hint { font-size: 11.5px; color: var(--muted); margin-top: 4px; }
+  #mcanvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: grab; display: block; }
+  #mcanvas.drag { cursor: grabbing; }
+  #mcanvas.over { cursor: move; }
   #svgwrap, #canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
   #svgwrap { overflow: hidden; cursor: grab; touch-action: none; }
   #svgwrap.drag, #canvas.drag { cursor: grabbing; }
   #svgwrap svg { width: 100%; height: 100%; display: block; }
   #canvas { touch-action: none; cursor: grab; display: block; }
+  #pathswrap {
+    position: absolute; inset: 0; overflow: auto; padding: 12px;
+    display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    align-content: start;
+  }
+  #pathswrap.one { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr); align-content: stretch; }
+  .card { border: 1px solid var(--line); border-radius: 7px; background: var(--bg);
+          display: flex; flex-direction: column; min-height: 260px; }
+  .card h4 { margin: 0; padding: 6px 10px; font-size: 12.5px; font-weight: 600; flex-wrap: wrap;
+             border-bottom: 1px solid var(--line); display: flex; gap: 2px 8px; align-items: baseline; }
+  .card h4 > * { white-space: nowrap; }
+  .card h4 .muted { font-weight: 400; }
+  .card h4 .bad { margin-left: auto; }
+  .card svg { flex: 1; width: 100%; min-height: 0; display: block; cursor: grab; touch-action: none; }
+  .card svg.drag { cursor: grabbing; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px; }
   .empty, #busy {
     position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
     color: var(--muted); font-size: 13px; text-align: center; padding: 20px;
@@ -185,6 +215,23 @@
       <div class="chips" id="densities"></div>
     </div>
 
+    <div>
+      <span class="label" title="Confine the sweep to part of the model, such as the sensing face, so a probe or tab is not filled with the pattern under test. With no modifiers the whole part is swept.">Sweep region</span>
+      <div class="pair" style="margin-top:6px">
+        <button class="tool" id="add-cylinder" disabled>+ Cylinder</button>
+        <button class="tool" id="add-box" disabled>+ Box</button>
+      </div>
+      <div id="modlist"></div>
+      <div class="rows" id="outside-row" style="margin-top:8px; display:none">
+        <span title="What happens to the parts of the model outside every modifier">Outside</span>
+        <select id="outside">
+          <option value="solid">solid</option>
+          <option value="skip">omit</option>
+        </select>
+      </div>
+      <div class="hint" id="modhint">Whole part is swept. Add a modifier to sweep only what it covers.</div>
+    </div>
+
     <div class="rows">
       <span>Perimeters</span><input type="number" id="perimeters" value="2" min="0" step="1">
       <span>Solid skin layers</span><input type="number" id="solid_layers" value="0" min="0" step="1">
@@ -233,6 +280,13 @@
           <option value="stroke">stroke</option><option value="outline">outline</option>
           <option value="both">both</option>
         </select>
+        <span title="Three alignment marks round the electrodes: a ring with a dot at its centre, at the same place in every layer and pass, to line each print up on the first. They are printed every time.">Alignment marks</span>
+        <input type="checkbox" id="fiducials" checked style="justify-self:start">
+        <span title="How the GTL export is split. The NOVA fills Gerber artwork with Arachne rather than following its strokes, and Arachne mangles any place strips cross or meet. Print passes keeps every file free of junctions: walls first, then the infill in as many passes as it takes for no two strips in one to touch. One per layer writes each layer as drawn.">GTL files</span>
+        <select id="gtl_mode">
+          <option value="passes">print passes</option>
+          <option value="layers">one per layer</option>
+        </select>
       </div>
     </details>
 
@@ -241,17 +295,22 @@
       <div class="pair" style="margin-top:6px">
         <button class="tool" id="dl-svg" disabled>SVG</button>
         <button class="tool" id="dl-json" disabled>Manifest</button>
+        <button class="tool" id="dl-gtl" disabled
+                title="Gerber top copper for the NOVA, zipped. Files are named in print order: each layer's walls, then its infill passes. Set how it is split under Model &amp; output.">GTL</button>
       </div>
     </div>
   </aside>
 
   <section class="stage">
     <div class="tabs" role="tablist">
-      <button class="tab" id="tab-plate" role="tab" aria-selected="true" aria-controls="pane-plate">Plate</button>
+      <button class="tab" id="tab-model" role="tab" aria-selected="true" aria-controls="pane-model">Model</button>
+      <button class="tab" id="tab-plate" role="tab" aria-selected="false" aria-controls="pane-plate">Plate</button>
       <button class="tab" id="tab-3d" role="tab" aria-selected="false" aria-controls="pane-3d">3D</button>
+      <button class="tab" id="tab-paths" role="tab" aria-selected="false" aria-controls="pane-paths"
+              title="How the NOVA is likely to fill each GTL print pass with a tip of a given width">Toolpaths</button>
     </div>
 
-    <div class="bar" id="bar-plate">
+    <div class="bar" id="bar-plate" style="display:none">
       <label>Layer <select id="layer"><option value="all">all</option></select></label>
       <button class="tool" data-zoom="in">+</button>
       <button class="tool" data-zoom="out">&minus;</button>
@@ -259,6 +318,14 @@
       <button class="tool" data-zoom="plate">Plate</button>
       <span class="spacer"></span>
       <span class="muted" id="zoominfo"></span>
+    </div>
+
+    <div class="bar" id="bar-model">
+      <label>Z&times; <input type="range" id="mzex" min="1" max="40" value="6"></label>
+      <button class="tool" data-mview="top">Top</button>
+      <button class="tool" data-mview="reset">Reset</button>
+      <span class="spacer"></span>
+      <span class="muted">drag a modifier to move it &middot; alt-drag to raise it &middot; drag to orbit &middot; shift-drag to pan</span>
     </div>
 
     <div class="bar" id="bar-3d" style="display:none">
@@ -271,10 +338,34 @@
       <span class="muted" id="info3d"></span>
     </div>
 
-    <div class="pane on" id="pane-plate" role="tabpanel">
+    <div class="pane" id="pane-plate" role="tabpanel">
       <div id="messages"></div>
       <div id="svgwrap"><div class="empty">Drop an STL to begin.</div></div>
       <div id="busy"><span id="busytext">slicing…</span></div>
+    </div>
+
+    <div class="pane on" id="pane-model" role="tabpanel">
+      <canvas id="mcanvas"></canvas>
+      <div class="empty" id="emptymodel">Drop an STL to place modifiers on it.</div>
+    </div>
+
+    <div class="bar" id="bar-paths" style="display:none">
+      <label>Electrode <select id="pickpaths" style="min-width:140px"></select></label>
+      <label>Layer <select id="layerpaths"></select></label>
+      <label title="Width of the dispensing tip, in microns. The NOVA fills each pass's copper with beads this wide.">Tip &micro;m <input type="number" id="tip" value="100" min="10" max="2000" step="10" style="width:72px"></label>
+      <label>Pass <select id="passpaths"><option value="all">all</option></select></label>
+      <span class="spacer"></span>
+      <span class="muted">
+        <span class="swatch" style="background:var(--model)"></span> GTL copper
+        &nbsp;<span class="swatch" style="background:var(--accent);opacity:.45"></span> tip
+        &nbsp;<span class="swatch" style="background:var(--infill)"></span> unreachable
+        &middot; scroll to zoom, drag to pan, double-click to fit
+      </span>
+    </div>
+
+    <div class="pane" id="pane-paths" role="tabpanel">
+      <div id="pathswrap"></div>
+      <div class="empty" id="emptypaths">Slice a plate, then pick an electrode.</div>
     </div>
 
     <div class="pane" id="pane-3d" role="tabpanel">
@@ -325,6 +416,8 @@
     userMoved: false,               // has the user panned or zoomed themselves?
     pendingFit: false,              // a fit deferred because the pane was hidden
     detail: null, pick: null,       // 3D
+    mesh: null,                     // the model as prepared, for placing modifiers
+    modifiers: [], selected: null,  // where the sweep applies
   };
 
   // Whatever the chosen machine says, so a blank field falls back to the
@@ -360,7 +453,7 @@
       $("patterns").append(c);
     }
     const want = new Set(meta.defaults.densities);
-    for (const d of [10, 20, 30, 40, 50, 60, 70, 80, 90]) {
+    for (const d of [10, 15, 20, 25, 30, 40, 50, 60, 70, 80, 90]) {
       const c = chip(String(d), null, want.has(d));
       c.dataset.value = String(d);
       $("densities").append(c);
@@ -414,6 +507,9 @@
       $("drop").innerHTML = `<strong>${escapeHtml(file.name)}</strong><small>${(file.size / 1024).toFixed(0)} kB · click to replace</small>`;
       $("run").disabled = false;
       state.view = null; state.userMoved = false;   // a new model gets a fresh fit
+      // Modifiers were placed against the old model; they mean nothing on this one.
+      state.modifiers = []; state.selected = null; renderModifiers();
+      loadMesh();
       schedule();
     };
     reader.readAsArrayBuffer(file);
@@ -499,6 +595,10 @@
       reference: num("reference", 1, 0, 50, true),
       layout: $("layout").value,
       svg_mode: $("svg_mode").value,
+      modifiers: state.modifiers.map((m) => ({ shape: m.shape, center: m.center, size: m.size })),
+      outside: $("outside").value,
+      gtl_mode: $("gtl_mode").value,
+      fiducials: $("fiducials").checked,
     };
   }
 
@@ -526,13 +626,13 @@
         message("err", "Could not slice this", [data.error]);
         // The message panel lives on the plate tab, so go there to show it
         // rather than leaving the 3D view silently stale.
-        if ($("tab-3d").getAttribute("aria-selected") === "true") tab("plate");
+        if (current() !== "plate") tab("plate");
         return;
       }
       show(data);
     } catch (err) {
       message("err", "The server did not respond", [String(err)]);
-      if ($("tab-3d").getAttribute("aria-selected") === "true") tab("plate");
+      if (current() !== "plate") tab("plate");
     } finally {
       state.busy = false; $("busy").classList.remove("on"); $("run").disabled = false;
       if (state.stale) { state.stale = false; schedule(); }
@@ -543,7 +643,7 @@
     state.svg = data.svg; state.manifest = data.manifest; state.plate = data.plate;
     state.variants = data.variants;
     state.doc = new DOMParser().parseFromString(data.svg, "image/svg+xml");
-    $("dl-svg").disabled = $("dl-json").disabled = false;
+    $("dl-svg").disabled = $("dl-json").disabled = $("dl-gtl").disabled = false;
 
     const m = data.model;
     $("modelinfo").textContent = `${m.extents[0]} × ${m.extents[1]} × ${m.extents[2]} mm` +
@@ -552,6 +652,9 @@
       `${data.electrodes} electrodes · ${data.layers} layer${data.layers === 1 ? "" : "s"} · plate ${data.plate[0]}×${data.plate[1]} mm`;
 
     if (data.warnings.length) message("warn", "Worth checking before you print", data.warnings);
+    // The notes live on the plate tab; say so from whichever tab is showing.
+    $("tab-plate").textContent = data.warnings.length ? `Plate (${data.warnings.length} ⚠)` : "Plate";
+    $("tab-plate").title = data.warnings.length ? "Warnings about this plate are shown here" : "";
     if ($("svg_mode").value === "outline") {
       message("warn", "Outline mode hides the effect you are measuring",
         ["Unioning the beads into flat regions discards the record of a bead being laid over another. Use stroke mode to keep the crossings."]);
@@ -562,17 +665,27 @@
       sel.replaceChildren(new Option("all", "all"));
       for (let i = 0; i < data.layers; i++) sel.append(new Option(`layer ${i}`, String(i)));
     }
+    const keepPathsLayer = $("layerpaths").value;
+    $("layerpaths").replaceChildren();
+    for (let i = 0; i < data.layers; i++) $("layerpaths").append(new Option(`layer ${i}`, String(i)));
+    $("layerpaths").value = [...$("layerpaths").options].some((o) => o.value === keepPathsLayer)
+      ? keepPathsLayer : "0";
     $("layer").value = [...$("layer").options].some((o) => o.value === keep) ? keep : "all";
 
     const prev = $("pick3d").value;
     $("pick3d").replaceChildren();
     for (const v of data.variants) $("pick3d").append(new Option(`${v.pattern} ${v.density_pct}%`, v.id));
     $("pick3d").value = data.variants.some((v) => v.id === prev) ? prev : (data.variants[0] || {}).id || "";
+    const prevPaths = $("pickpaths").value;
+    $("pickpaths").replaceChildren(...[...$("pick3d").options].map((o) => new Option(o.text, o.value)));
+    $("pickpaths").value = data.variants.some((v) => v.id === prevPaths) ? prevPaths : $("pick3d").value;
 
     render2d();
     table(data.summary);
     if ($("tab-3d").getAttribute("aria-selected") === "true") loadDetail();
     else state.detail = null;
+    state.paths = null;
+    if (current() === "paths") loadPaths();
   }
 
   // =====================================================================
@@ -714,7 +827,7 @@
     });
   }
   $("layer").addEventListener("change", render2d);
-  window.addEventListener("resize", () => { applyView(); resizeCanvas(); });
+  window.addEventListener("resize", () => { applyView(); resizeCanvas(); resizeModel(); });
 
   // =====================================================================
   // 3D view
@@ -762,17 +875,20 @@
 
   /** Orthographic projection: spin about Z, then tilt towards the viewer.
    *
-   * Tilting rotates the (y, z) pair by the elevation, giving a screen-up axis
-   * of z*cos - y*sin and a depth axis of z*sin + y*cos.  Canvas Y points down,
-   * so it is the negated screen-up: taller layers must sit higher up the view,
-   * and further-forward geometry must sort last so it draws on top.
+   * The viewer sits in front (towards -y) and above, at the elevation.  That
+   * gives a screen-up axis of y*sin + z*cos and a depth axis, towards the
+   * viewer, of z*sin - y*cos; with x to the right the three are right-handed,
+   * so the part is never drawn as its mirror image.  Canvas Y points down,
+   * so it is the negated screen-up, and nearer geometry sorts last so it draws
+   * on top.  Looking straight down, +y is up the screen, as on the plate.
    */
-  function project(x, y, z, k) {
-    const ca = Math.cos(cam.az), sa = Math.sin(cam.az);
+  function orbitProject(view, x, y, z, k) {
+    const ca = Math.cos(view.az), sa = Math.sin(view.az);
     const rx = x * ca - y * sa, ry = x * sa + y * ca;
-    const ce = Math.cos(cam.el), se = Math.sin(cam.el);
-    return [rx * k, (ry * se - z * ce) * k, ry * ce + z * se];
+    const ce = Math.cos(view.el), se = Math.sin(view.el);
+    return [rx * k, -(ry * se + z * ce) * k, (z * se - ry * ce) * k];
   }
+  const project = (x, y, z, k) => orbitProject(cam, x, y, z, k);
 
   function draw3d() {
     if (!ctx) return;
@@ -807,7 +923,8 @@
     const items = [];
     for (const L of layers) {
       const z = L.top;                              // draw at the top of its layer
-      for (const [role, paths] of [["perimeter", L.perimeters], ["infill", L.infill]]) {
+      for (const [role, paths] of [["perimeter", L.perimeters], ["solid", L.solid || []],
+                                   ["infill", L.infill]]) {
         for (const pts of paths) {
           const proj = pts.map(([x, y]) => to(x, y, z));
           let depth = 0;
@@ -831,6 +948,7 @@
     const style = getComputedStyle(document.documentElement);
     const colours = {
       perimeter: style.getPropertyValue("--accent").trim(),
+      solid: style.getPropertyValue("--solid").trim(),
       infill: style.getPropertyValue("--infill").trim(),
       hump: style.getPropertyValue("--hump").trim(),
     };
@@ -902,24 +1020,525 @@
   }
 
   // =====================================================================
+  // model view: placing modifiers
+  //
+  // A modifier is a box or upright cylinder in the model's own frame; the
+  // sweep fills only what lies inside one.  The mesh comes from the server
+  // with units, scale and rotation already applied, so a modifier placed
+  // over it here sits over the same geometry in the slicer.
+  // =====================================================================
+  const mcanvas = $("mcanvas");
+  const mctx = mcanvas.getContext("2d");
+  const MVIEW = { az: -0.6, el: 0.75, zoom: 1, panX: 0, panY: 0 };
+  const mcam = { ...MVIEW };
+  const round3 = (v) => Math.round(v * 1000) / 1000;
+  let modifierIds = 0;
+  let meshRequest = 0;
+  let meshLayer = null;             // the shaded mesh, kept while only modifiers move
+
+  async function loadMesh() {
+    if (!state.stl) return;
+    const ticket = ++meshRequest;   // a slower, older reply must not win
+    const body = { stl: state.stl, units: $("units").value,
+                   scale: num("scale", 1, 0.01, 1000), rotate: num("rotate", 0, -360, 360) };
+    $("emptymodel").textContent = "loading model…";
+    $("emptymodel").style.display = "flex";
+    try {
+      const res = await fetch("/api/mesh", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (ticket !== meshRequest) return;
+      if (!res.ok) { state.mesh = null; $("emptymodel").textContent = data.error; drawModel(); return; }
+      const raw = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)).buffer;
+      state.mesh = { v: new Float32Array(raw(data.vertices)), f: new Uint32Array(raw(data.faces)),
+                     extents: data.extents };
+      meshLayer = null;
+      $("emptymodel").style.display = "none";
+      $("add-cylinder").disabled = $("add-box").disabled = false;
+      resizeModel();
+    } catch (err) {
+      if (ticket === meshRequest) $("emptymodel").textContent = String(err);
+    }
+  }
+
+  function addModifier(shape) {
+    if (!state.mesh) return;
+    const [w, d, h] = state.mesh.extents;
+    const across = Math.min(w, d);
+    // Start over the middle of the part and through its full height, a
+    // little proud top and bottom so no layer falls just outside it.
+    const m = {
+      id: ++modifierIds, shape,
+      center: [w / 2, d / 2, h / 2].map(round3),
+      size: (shape === "cylinder" ? [across, across, h * 1.1] : [w * 0.6, d * 0.6, h * 1.1]).map(round3),
+    };
+    state.modifiers.push(m);
+    state.selected = m.id;
+    renderModifiers();
+    tab("model");
+    schedule();
+  }
+  $("add-cylinder").addEventListener("click", () => addModifier("cylinder"));
+  $("add-box").addEventListener("click", () => addModifier("box"));
+
+  function removeModifier(id) {
+    state.modifiers = state.modifiers.filter((m) => m.id !== id);
+    if (state.selected === id) state.selected = null;
+    renderModifiers();
+    schedule();
+  }
+
+  function selectModifier(id) {
+    state.selected = id;
+    for (const el of $("modlist").children) {
+      el.setAttribute("aria-current", String(Number(el.dataset.id) === id));
+    }
+    drawModel();
+  }
+
+  /** Write a modifier's numbers back into its form after a drag. */
+  function syncModifier(m) {
+    const el = $("modlist").querySelector(`[data-id="${m.id}"]`);
+    if (!el) return;
+    for (const inp of el.querySelectorAll("input")) inp.value = m[inp.dataset.k][Number(inp.dataset.a)];
+  }
+
+  function renderModifiers() {
+    const list = $("modlist");
+    list.replaceChildren();
+    state.modifiers.forEach((m, i) => {
+      const cyl = m.shape === "cylinder";
+      const el = document.createElement("div");
+      el.className = "mod"; el.dataset.id = String(m.id);
+      el.setAttribute("aria-current", String(m.id === state.selected));
+      const trio = (k, extra) => `<span class="trio">${[0, 1, 2].map((a) =>
+        `<input type="number" step="0.1" data-k="${k}" data-a="${a}" title="${"xyz"[a]}"${extra}>`).join("")}</span>`;
+      el.innerHTML =
+        `<div class="head"><b>${cyl ? "Cylinder" : "Box"} ${i + 1}</b>` +
+        `<button type="button" title="Remove" aria-label="Remove">&times;</button></div>` +
+        `<div class="rows"><span title="Centre x, y, z in mm, in the model's own frame">Centre</span>${trio("center", "")}` +
+        `<span title="${cyl ? "Diameter along x and along y, and height" : "Width, depth and height"}, mm">Size</span>` +
+        `${trio("size", ' min="0.01"')}</div>`;
+      for (const inp of el.querySelectorAll("input")) {
+        const k = inp.dataset.k, a = Number(inp.dataset.a);
+        inp.value = m[k][a];
+        inp.addEventListener("change", () => {
+          const v = parseFloat(inp.value);
+          if (!Number.isFinite(v) || (k === "size" && v <= 0)) { inp.value = m[k][a]; return; }
+          m[k][a] = v;
+          drawModel();
+          schedule();
+        });
+      }
+      el.querySelector("button").addEventListener("click", (e) => { e.stopPropagation(); removeModifier(m.id); });
+      el.addEventListener("click", () => selectModifier(m.id));
+      list.append(el);
+    });
+    const any = state.modifiers.length > 0;
+    $("outside-row").style.display = any ? "" : "none";
+    $("modhint").textContent = any
+      ? "Only what the modifiers cover is swept, and its density is measured there alone."
+      : "Whole part is swept. Add a modifier to sweep only what it covers.";
+    drawModel();
+  }
+
+  function resizeModel() {
+    const dpr = window.devicePixelRatio || 1;
+    const rect = mcanvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    mcanvas.width = Math.round(rect.width * dpr);
+    mcanvas.height = Math.round(rect.height * dpr);
+    mctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    meshLayer = null;
+    drawModel();
+  }
+
+  /** The current camera, as a world-to-canvas mapping and its inverse for dragging. */
+  function modelFrame() {
+    const rect = mcanvas.getBoundingClientRect();
+    const [ex, ey, ez] = state.mesh.extents;
+    const zex = Number($("mzex").value);
+    const k = (Math.min(rect.width, rect.height) / (Math.max(ex, ey, 1e-6) * 1.6)) * mcam.zoom;
+    const ox = rect.width / 2 + mcam.panX, oy = rect.height / 2 + mcam.panY;
+    const to = (x, y, z) => {
+      const p = orbitProject(mcam, x - ex / 2, y - ey / 2, (z - ez / 2) * zex, k);
+      return [ox + p[0], oy + p[1], p[2]];
+    };
+    return { rect, k, zex, to };
+  }
+
+  function colourOf(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  /** The shaded mesh, painted back to front with flat shading. */
+  function paintMesh(F) {
+    const dpr = window.devicePixelRatio || 1;
+    const layer = document.createElement("canvas");
+    layer.width = mcanvas.width; layer.height = mcanvas.height;
+    const g = layer.getContext("2d");
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const { v, f } = state.mesh;
+    const P = new Float32Array(v.length);
+    for (let i = 0; i < v.length; i += 3) {
+      const p = F.to(v[i], v[i + 1], v[i + 2]);
+      P[i] = p[0]; P[i + 1] = p[1]; P[i + 2] = p[2];
+    }
+    const n = f.length / 3;
+    const depth = new Float32Array(n);
+    const order = new Uint32Array(n);
+    for (let t = 0; t < n; t++) {
+      depth[t] = P[f[3 * t] * 3 + 2] + P[f[3 * t + 1] * 3 + 2] + P[f[3 * t + 2] * 3 + 2];
+      order[t] = t;
+    }
+    order.sort((a, b) => depth[a] - depth[b]);
+    const hex = colourOf("--model").replace("#", "");
+    const base = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16));
+    g.lineJoin = "round"; g.lineWidth = 0.6;
+    for (const t of order) {
+      const a = f[3 * t] * 3, b = f[3 * t + 1] * 3, c = f[3 * t + 2] * 3;
+      // Light from the viewer: brightness follows how squarely the face turns
+      // towards the screen, which is all a flat-shaded part needs to read.
+      const ux = P[b] - P[a], uy = P[b + 1] - P[a + 1], uz = P[b + 2] - P[a + 2];
+      const wx = P[c] - P[a], wy = P[c + 1] - P[a + 1], wz = P[c + 2] - P[a + 2];
+      const nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
+      const len = Math.hypot(nx, ny, nz);
+      if (!len) continue;
+      const shade = 0.5 + 0.5 * Math.abs(nz) / len;
+      const col = `rgb(${base.map((ch) => Math.round(ch * shade)).join(",")})`;
+      g.fillStyle = g.strokeStyle = col;
+      g.beginPath();
+      g.moveTo(P[a], P[a + 1]); g.lineTo(P[b], P[b + 1]); g.lineTo(P[c], P[c + 1]);
+      g.closePath(); g.fill(); g.stroke();
+    }
+    return layer;
+  }
+
+  function convexHull(points) {
+    const pts = points.map((p) => [p[0], p[1]]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    if (pts.length < 3) return pts;
+    const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    const lower = [], upper = [];
+    for (const p of pts) {
+      while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
+      lower.push(p);
+    }
+    for (let i = pts.length - 1; i >= 0; i--) {
+      const p = pts[i];
+      while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
+      upper.push(p);
+    }
+    return lower.slice(0, -1).concat(upper.slice(0, -1));
+  }
+
+  function insideHull(hull, x, y) {
+    if (hull.length < 3) return false;
+    for (let i = 0; i < hull.length; i++) {
+      const [ax, ay] = hull[i], [bx, by] = hull[(i + 1) % hull.length];
+      if ((bx - ax) * (y - ay) - (by - ay) * (x - ax) < 0) return false;
+    }
+    return true;
+  }
+
+  /** A modifier as drawn: its top and bottom outlines and the silhouette round both. */
+  function modifierShape(m, F) {
+    const [cx, cy, cz] = m.center, [w, d, h] = m.size;
+    const ring = m.shape === "box"
+      ? [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([a, b]) => [cx + a * w / 2, cy + b * d / 2])
+      : Array.from({ length: 48 }, (_, i) => {
+          const t = (i / 48) * 2 * Math.PI;
+          return [cx + Math.cos(t) * w / 2, cy + Math.sin(t) * d / 2];
+        });
+    const bottom = ring.map(([x, y]) => F.to(x, y, cz - h / 2));
+    const top = ring.map(([x, y]) => F.to(x, y, cz + h / 2));
+    return { bottom, top, hull: convexHull(bottom.concat(top)) };
+  }
+
+  function modifierAt(px, py) {
+    if (!state.mesh) return null;
+    const F = modelFrame();
+    // The selected one first, so it stays grabbable where it overlaps others.
+    const ordered = [...state.modifiers].sort((a, b) =>
+      (b.id === state.selected) - (a.id === state.selected));
+    return ordered.find((m) => insideHull(modifierShape(m, F).hull, px, py)) || null;
+  }
+
+  function drawModel() {
+    const rect = mcanvas.getBoundingClientRect();
+    mctx.clearRect(0, 0, rect.width, rect.height);
+    if (!state.mesh || !rect.width) return;
+    const F = modelFrame();
+    if (!meshLayer) meshLayer = paintMesh(F);
+    mctx.save();
+    mctx.setTransform(1, 0, 0, 1, 0, 0);
+    mctx.drawImage(meshLayer, 0, 0);
+    mctx.restore();
+
+    // Axes at the model's origin, so the numbers in the form have a direction.
+    const [ex, ey] = state.mesh.extents;
+    const L = Math.max(ex, ey) * 0.18;
+    const o = F.to(0, 0, 0);
+    mctx.font = "11px ui-sans-serif, system-ui, sans-serif";
+    mctx.lineWidth = 1.2;
+    for (const [label, p] of [["x", F.to(L, 0, 0)], ["y", F.to(0, L, 0)], ["z", F.to(0, 0, L / F.zex)]]) {
+      mctx.strokeStyle = mctx.fillStyle = colourOf("--muted");
+      mctx.beginPath(); mctx.moveTo(o[0], o[1]); mctx.lineTo(p[0], p[1]); mctx.stroke();
+      mctx.fillText(label, p[0] + 3, p[1] - 3);
+    }
+
+    // Modifiers over the top, translucent so the part still shows through.
+    for (const m of state.modifiers) {
+      const on = m.id === state.selected;
+      const colour = colourOf(on ? "--hump" : "--accent");
+      const s = modifierShape(m, F);
+      mctx.fillStyle = colour; mctx.globalAlpha = on ? 0.22 : 0.12;
+      mctx.beginPath();
+      s.hull.forEach(([x, y], i) => (i ? mctx.lineTo(x, y) : mctx.moveTo(x, y)));
+      mctx.closePath(); mctx.fill();
+      mctx.globalAlpha = 1; mctx.strokeStyle = colour; mctx.lineWidth = on ? 1.8 : 1.2;
+      for (const ring of [s.bottom, s.top]) {
+        mctx.beginPath();
+        ring.forEach(([x, y], i) => (i ? mctx.lineTo(x, y) : mctx.moveTo(x, y)));
+        mctx.closePath(); mctx.stroke();
+      }
+      mctx.beginPath();
+      if (m.shape === "box") {
+        s.bottom.forEach(([x, y], i) => { mctx.moveTo(x, y); mctx.lineTo(s.top[i][0], s.top[i][1]); });
+      } else {
+        s.hull.forEach(([x, y], i) => (i ? mctx.lineTo(x, y) : mctx.moveTo(x, y)));
+        mctx.closePath();
+      }
+      mctx.stroke();
+    }
+  }
+
+  let mdrag = null;
+  mcanvas.addEventListener("pointerdown", (e) => {
+    if (!state.mesh) return;
+    const r = mcanvas.getBoundingClientRect();
+    const hit = !e.shiftKey && e.button === 0 ? modifierAt(e.clientX - r.left, e.clientY - r.top) : null;
+    if (hit) {
+      selectModifier(hit.id);
+      mdrag = { kind: e.altKey ? "lift" : "move", m: hit, x: e.clientX, y: e.clientY,
+                start: [...hit.center], moved: false };
+    } else {
+      mdrag = { kind: e.shiftKey || e.button === 1 ? "pan" : "orbit", x: e.clientX, y: e.clientY,
+                az: mcam.az, el: mcam.el, panX: mcam.panX, panY: mcam.panY };
+    }
+    mcanvas.setPointerCapture(e.pointerId); mcanvas.classList.add("drag");
+  });
+  mcanvas.addEventListener("pointermove", (e) => {
+    if (!mdrag) {
+      const r = mcanvas.getBoundingClientRect();
+      mcanvas.classList.toggle("over", !!modifierAt(e.clientX - r.left, e.clientY - r.top));
+      return;
+    }
+    const dx = e.clientX - mdrag.x, dy = e.clientY - mdrag.y;
+    if (mdrag.kind === "move" || mdrag.kind === "lift") {
+      const F = modelFrame();
+      const ca = Math.cos(mcam.az), sa = Math.sin(mcam.az);
+      const ce = Math.cos(mcam.el), se = Math.sin(mcam.el);
+      const c = [...mdrag.start];
+      if (mdrag.kind === "move") {
+        // Slide in the horizontal plane: undo the tilt, then the spin.  Near
+        // edge-on the plane foreshortens to nothing, so cap the gearing.
+        const rx = dx / F.k, ry = -dy / (Math.max(Math.abs(se), 0.2) * F.k);
+        c[0] += rx * ca + ry * sa;
+        c[1] += -rx * sa + ry * ca;
+      } else {
+        c[2] += -dy / (Math.max(Math.abs(ce), 0.2) * F.k * F.zex);
+      }
+      mdrag.m.center = c.map(round3);
+      mdrag.moved = true;
+      syncModifier(mdrag.m);
+    } else if (mdrag.kind === "pan") {
+      mcam.panX = mdrag.panX + dx; mcam.panY = mdrag.panY + dy; meshLayer = null;
+    } else {
+      mcam.az = mdrag.az + dx * 0.008;
+      mcam.el = clamp(mdrag.el + dy * 0.008, -Math.PI / 2 + 0.02, Math.PI / 2 - 0.02);
+      meshLayer = null;
+    }
+    drawModel();
+  });
+  for (const ev of ["pointerup", "pointercancel"]) {
+    mcanvas.addEventListener(ev, () => {
+      if (mdrag && mdrag.moved) schedule();
+      mdrag = null; mcanvas.classList.remove("drag");
+    });
+  }
+  mcanvas.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    mcam.zoom = clamp(mcam.zoom * Math.exp(-e.deltaY * 0.0016), 0.15, 60);
+    meshLayer = null;
+    drawModel();
+  }, { passive: false });
+  $("mzex").addEventListener("input", () => { meshLayer = null; drawModel(); });
+  for (const b of document.querySelectorAll("[data-mview]")) {
+    b.addEventListener("click", () => {
+      Object.assign(mcam, MVIEW);
+      if (b.dataset.mview === "top") { mcam.az = 0; mcam.el = Math.PI / 2 - 0.02; }
+      meshLayer = null;
+      drawModel();
+    });
+  }
+
+  // =====================================================================
+  // toolpaths view: how the NOVA is likely to fill each GTL pass
+  // =====================================================================
+  const SVGNS = "http://www.w3.org/2000/svg";
+
+  function pathsKey() {
+    return [$("pickpaths").value, $("layerpaths").value, $("tip").value].join("|");
+  }
+
+  async function loadPaths() {
+    const id = $("pickpaths").value;
+    const empty = $("emptypaths");
+    if (!state.stl || !id) {
+      state.paths = null; $("pathswrap").replaceChildren();
+      empty.textContent = "Slice a plate, then pick an electrode."; empty.style.display = "flex";
+      return;
+    }
+    const key = pathsKey();
+    state.pathsKey = key;
+    empty.textContent = "filling the passes…"; empty.style.display = "flex";
+    try {
+      const res = await fetch("/api/toolpaths", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...request(), variant: id, layer: Number($("layerpaths").value || 0),
+                               tip_um: Number($("tip").value) }),
+      });
+      const data = await res.json();
+      if (key !== state.pathsKey) return;            // a newer request has been sent
+      if (!res.ok) { state.paths = null; $("pathswrap").replaceChildren(); empty.textContent = data.error; return; }
+      state.paths = data;
+      empty.style.display = "none";
+      const keep = $("passpaths").value;
+      $("passpaths").replaceChildren(new Option("all", "all"));
+      for (const p of data.passes) $("passpaths").append(new Option(`${p.pass} ${p.role}`, String(p.pass)));
+      $("passpaths").value = [...$("passpaths").options].some((o) => o.value === keep) ? keep : "all";
+      drawPaths();
+    } catch (err) {
+      empty.textContent = String(err);
+    }
+  }
+
+  /** Polygons as one SVG path, rings and holes together (even-odd fill). */
+  function ringsD(polys) {
+    return polys.flat().map((ring) =>
+      "M" + ring.map(([x, y]) => `${x} ${y}`).join("L") + "Z").join("");
+  }
+
+  function linesD(lines) {
+    return lines.map((ln) => "M" + ln.map(([x, y]) => `${x} ${y}`).join("L")).join("");
+  }
+
+  function el(tag, attrs) {
+    const node = document.createElementNS(SVGNS, tag);
+    for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+    return node;
+  }
+
+  function drawPaths() {
+    const data = state.paths, wrap = $("pathswrap");
+    if (!data) return;
+    const pick = $("passpaths").value;
+    const shown = data.passes.filter((p) => pick === "all" || String(p.pass) === pick);
+    wrap.classList.toggle("one", shown.length === 1);
+    const tip = data.tip_um / 1000;
+    const pad = 0.4, [w, h] = data.extents;
+    const fit = { x: -pad, y: -h - pad, w: w + 2 * pad, h: h + 2 * pad };
+    wrap.replaceChildren(...shown.map((p) => {
+      const card = document.createElement("div");
+      card.className = "card";
+      const singles = p.single.filter(Boolean).length;
+      card.innerHTML = `<h4><span>Pass ${p.pass} &middot; ${p.role}</span>` +
+        `<span class="muted">${p.loops.length - singles} loop${p.loops.length - singles === 1 ? "" : "s"}` +
+        (singles ? ` + ${singles} single bead${singles === 1 ? "" : "s"}` : "") +
+        ` &middot; ${p.path_mm} mm</span>` +
+        `<span class="${p.gap_pct > 1 ? "bad" : "muted"}">${p.gap_pct}% unreachable</span></h4>`;
+      const svg = el("svg", { viewBox: `${fit.x} ${fit.y} ${fit.w} ${fit.h}`,
+                              preserveAspectRatio: "xMidYMid meet" });
+      // Model y points to the back of the plate; flip so it reads like the plate view.
+      const g = el("g", { transform: "scale(1,-1)" });
+      g.append(
+        el("path", { d: ringsD(p.artwork), fill: "var(--model)", "fill-rule": "evenodd", opacity: "0.55" }),
+        el("path", { d: linesD(p.loops), fill: "none", stroke: "var(--accent)", "stroke-opacity": "0.35",
+                     "stroke-width": tip, "stroke-linejoin": "round", "stroke-linecap": "round" }),
+        el("path", { d: linesD(p.loops), fill: "none", stroke: "var(--accent)",
+                     "stroke-width": tip / 8, "stroke-linejoin": "round" }),
+        el("path", { d: ringsD(p.gaps), fill: "var(--infill)", "fill-rule": "evenodd" }),
+      );
+      svg.append(g);
+      zoomable(svg, fit);
+      card.append(svg);
+      return card;
+    }));
+  }
+
+  /** Wheel to zoom about the pointer, drag to pan, double-click to fit. */
+  function zoomable(svg, fit) {
+    let view = { ...fit }, drag = null;
+    const apply = () => svg.setAttribute("viewBox", `${view.x} ${view.y} ${view.w} ${view.h}`);
+    const toUser = (cx, cy) => {
+      const r = svg.getBoundingClientRect();
+      const k = Math.min(r.width / view.w, r.height / view.h);
+      return { k, x: view.x + (cx - r.left - (r.width - view.w * k) / 2) / k,
+               y: view.y + (cy - r.top - (r.height - view.h * k) / 2) / k };
+    };
+    svg.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      const u = toUser(e.clientX, e.clientY);
+      const f = Math.exp(e.deltaY * 0.0015);
+      const nw = clamp(view.w * f, fit.w / 400, fit.w * 4), s = nw / view.w;
+      view = { x: u.x - (u.x - view.x) * s, y: u.y - (u.y - view.y) * s, w: nw, h: view.h * s };
+      apply();
+    }, { passive: false });
+    svg.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      drag = { x: e.clientX, y: e.clientY, view: { ...view }, k: toUser(e.clientX, e.clientY).k };
+      svg.setPointerCapture(e.pointerId); svg.classList.add("drag");
+    });
+    svg.addEventListener("pointermove", (e) => {
+      if (!drag) return;
+      view = { ...drag.view, x: drag.view.x - (e.clientX - drag.x) / drag.k,
+               y: drag.view.y - (e.clientY - drag.y) / drag.k };
+      apply();
+    });
+    const end = () => { drag = null; svg.classList.remove("drag"); };
+    svg.addEventListener("pointerup", end);
+    svg.addEventListener("pointercancel", end);
+    svg.addEventListener("dblclick", () => { view = { ...fit }; apply(); });
+  }
+
+  for (const id of ["pickpaths", "layerpaths", "tip"]) $(id).addEventListener("change", loadPaths);
+  $("passpaths").addEventListener("change", drawPaths);
+
+  // =====================================================================
   // tabs
   // =====================================================================
+  const TABS = ["model", "plate", "3d", "paths"];
+  function current() { return TABS.find((t) => $(`tab-${t}`).getAttribute("aria-selected") === "true"); }
+
   function tab(which) {
-    const is3d = which === "3d";
-    $("tab-plate").setAttribute("aria-selected", String(!is3d));
-    $("tab-3d").setAttribute("aria-selected", String(is3d));
-    $("pane-plate").classList.toggle("on", !is3d);
-    $("pane-3d").classList.toggle("on", is3d);
-    $("bar-plate").style.display = is3d ? "none" : "";
-    $("bar-3d").style.display = is3d ? "" : "none";
-    if (is3d) {
+    for (const t of TABS) {
+      const on = t === which;
+      $(`tab-${t}`).setAttribute("aria-selected", String(on));
+      $(`pane-${t}`).classList.toggle("on", on);
+      $(`bar-${t}`).style.display = on ? "" : "none";
+    }
+    if (which === "3d") {
       if (!state.detail || state.pick !== $("pick3d").value) loadDetail();
       else resizeCanvas();
-    } else if (state.pendingFit || !state.fit) refit();
+    } else if (which === "model") resizeModel();
+    else if (which === "paths") {
+      if (!state.paths || state.pathsKey !== pathsKey()) loadPaths();
+    }
+    else if (state.pendingFit || !state.fit) refit();
     else applyView();
   }
-  $("tab-plate").addEventListener("click", () => tab("plate"));
-  $("tab-3d").addEventListener("click", () => tab("3d"));
+  for (const t of TABS) $(`tab-${t}`).addEventListener("click", () => tab(t));
 
   // =====================================================================
   // results table
@@ -963,19 +1582,47 @@
   $("dl-svg").addEventListener("click", () => download(`${stem()}-plate.svg`, state.svg, "image/svg+xml"));
   $("dl-json").addEventListener("click", () =>
     download(`${stem()}-plate.json`, JSON.stringify(state.manifest, null, 2), "application/json"));
+  // Gerber is written by the server from the same sweep, so fetch it rather
+  // than translating the SVG in the browser.
+  $("dl-gtl").addEventListener("click", async () => {
+    if (!state.stl) return;
+    const button = $("dl-gtl");
+    button.disabled = true;
+    try {
+      const res = await fetch("/api/gerber", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request()),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ error: res.statusText }));
+        message("err", "Could not export Gerber", [data.error]);
+        return;
+      }
+      const name = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") || "");
+      download(name ? name[1] : `${stem()}-plate.GTL`, await res.blob(), res.headers.get("Content-Type"));
+    } catch (err) {
+      message("err", "The server did not respond", [String(err)]);
+    } finally {
+      button.disabled = false;
+    }
+  });
 
   $("run").addEventListener("click", slice);
   for (const id of ["units", "scale", "rotate", "line_width", "layer_height", "perimeters",
                     "solid_layers", "replicates", "reference", "layout", "svg_mode",
                     "plate_x", "plate_y", "z_travel", "first_layer_height", "margin",
-                    "resolution", "gap"]) {
+                    "resolution", "gap", "fiducials"]) {
     $(id).addEventListener("change", schedule);
   }
   for (const id of ["plate_x", "plate_y", "z_travel", "line_width"]) {
     $(id).addEventListener("input", digest);
   }
   $("printer").addEventListener("change", (e) => { applyPreset(e.target.value); schedule(); });
+  // These change the frame the modifiers sit in, so the model view must follow.
+  for (const id of ["units", "scale", "rotate"]) $(id).addEventListener("change", loadMesh);
+  $("outside").addEventListener("change", schedule);
   new ResizeObserver(() => { applyView(); resizeCanvas(); }).observe($("pane-plate"));
+  new ResizeObserver(() => resizeModel()).observe($("pane-model"));
   boot();
 })();
 </script>

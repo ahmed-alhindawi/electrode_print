@@ -7,17 +7,17 @@ const say = (text) => self.postMessage({ type: "status", text });
 const ready = (async () => {
   say("Loading Python…");
   const py = await loadPyodide();
-  say("Loading numpy, scipy and shapely…");
+  say("Loading NumPy…");
   await py.loadPackage(["numpy", "scipy", "shapely", "contourpy", "charset-normalizer",
                         "micropip"]);
-  say("Loading trimesh and networkx…");
+  say("Loading trimesh…");
   const micropip = py.pyimport("micropip");
   // Pyodide's networkx lists matplotlib (for its drawing functions, which
   // nothing here calls) -- a few megabytes the first visit would download
   // for nothing.  networkx itself is pure Python and needs none of it.
   await micropip.install(py.toPy(["networkx", "decorator"]), { deps: false });
   await micropip.install("trimesh=={{TRIMESH}}");
-  say("Loading the slicer…");
+  say("Loading slicer…");
   const zip = await (await fetch("electrode_slicer.zip", { cache: "no-cache" })).arrayBuffer();
   py.unpackArchive(zip, "zip", { extractDir: "/home/pyodide" });
   const handle = py.pyimport("electrode_slicer.web.pages").handle;

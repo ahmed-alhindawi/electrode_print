@@ -8,23 +8,26 @@
 
   const banner = document.createElement("div");
   banner.setAttribute("role", "status");
+  // The privacy note and download size live in a hover tip, not the banner text.
+  banner.title = "Runs entirely in your browser; your STL is never uploaded. " +
+    "The first visit downloads about 35 MB.";
   banner.style.cssText = "position:fixed;left:50%;bottom:16px;transform:translateX(-50%);" +
-    "z-index:100;padding:8px 14px;border-radius:6px;font:13px system-ui,sans-serif;" +
-    "background:#1f4e79;color:#fff;box-shadow:0 2px 10px rgba(0,0,0,.25);max-width:90vw";
+    "z-index:100;padding:7px 14px;border-radius:999px;font:12.5px 'IBM Plex Sans',system-ui,sans-serif;" +
+    "background:var(--fg);color:var(--bg);box-shadow:0 2px 10px rgba(0,0,0,.25);max-width:90vw";
   const show = (text) => {
     banner.textContent = text;
     if (!banner.isConnected) document.body.append(banner);
   };
   document.addEventListener("DOMContentLoaded", () =>
-    show("Starting the slicer in your browser… the first visit downloads about 35 MB."));
+    show("Loading slicer…"));
 
   worker.onmessage = (event) => {
     const msg = event.data;
-    if (msg.type === "status") show(`${msg.text} (runs in your browser; your STL is not uploaded)`);
+    if (msg.type === "status") show(msg.text);
     else if (msg.type === "ready") banner.remove();
     else if (msg.type === "failed") {
       show(`The slicer could not start: ${msg.text}`);
-      banner.style.background = "#c0392b";
+      banner.style.background = "var(--infill)";
     } else if (msg.type === "reply") {
       const resolve = pending.get(msg.id);
       pending.delete(msg.id);

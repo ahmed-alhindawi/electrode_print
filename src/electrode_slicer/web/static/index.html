@@ -4,33 +4,66 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Electrode Slicer</title>
+<script>
+  // Before first paint, so a chosen theme never flashes the default.
+  try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch {}
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <style>
-  :root {
-    --bg: #fff;
-    --sunk: #f6f7f9;
-    --fg: #1c2024;
-    --muted: #6e7781;
-    --line: #e3e6ea;
-    --accent: #1f4e79;
-    --infill: #c0392b;
-    --hump: #e8a33d;
-    --solid: #8a96a3;
-    --model: #b8c0c8;
+  /* Themes.  "auto" (no data-theme) is Paper in light mode and Graphite in
+     dark.  --model must stay six-digit hex: the model view shades it per face. */
+  :root, :root[data-theme="paper"] {
+    --bg: #fbf9f4; --sunk: #f3efe6; --fg: #24211c; --muted: #7a7366; --line: #e2dccf;
+    --accent: #2b5d5a; --on-accent: #ffffff;
+    --infill: #c4472d; --hump: #d99a2b; --solid: #9a9283; --model: #c9c1b0;
+    --label: #4a453d; --plate: #b7af9f;
   }
   @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) {
-      --bg: #1b1e23; --sunk: #16191d; --fg: #e8eaed; --muted: #949ca6; --line: #2d333b;
-      --accent: #6fa8dc; --infill: #e8705f; --hump: #f0b95d; --solid: #6b7682; --model: #5d6670;
+    :root:not([data-theme]) {
+      --bg: #17191c; --sunk: #111315; --fg: #e6e6e3; --muted: #8b9096; --line: #2a2e33;
+      --accent: #4fd1c5; --on-accent: #0b1414;
+      --infill: #ff6b57; --hump: #f5b841; --solid: #6b7178; --model: #5a6068;
+      --label: #b9bcc0; --plate: #4a5057;
     }
+  }
+  :root[data-theme="graphite"] {
+    --bg: #17191c; --sunk: #111315; --fg: #e6e6e3; --muted: #8b9096; --line: #2a2e33;
+    --accent: #4fd1c5; --on-accent: #0b1414;
+    --infill: #ff6b57; --hump: #f5b841; --solid: #6b7178; --model: #5a6068;
+    --label: #b9bcc0; --plate: #4a5057;
+  }
+  :root[data-theme="blueprint"] {
+    --bg: #0f2742; --sunk: #0b1f36; --fg: #e4eefa; --muted: #8fa9c7; --line: #224468;
+    --accent: #7fd0ff; --on-accent: #06213a;
+    --infill: #ff7a6b; --hump: #ffd166; --solid: #6f8bab; --model: #5d7a9c;
+    --label: #b8cde6; --plate: #3d6390;
+  }
+  :root[data-theme="soldermask"] {
+    --bg: #10241c; --sunk: #0b1b15; --fg: #e8efe9; --muted: #8fa79a; --line: #22402f;
+    --accent: #d8924f; --on-accent: #1a0f05;
+    --infill: #ff6b6b; --hump: #ffe066; --solid: #6e8a7b; --model: #4f6b5d;
+    --label: #c4d4ca; --plate: #3a5c49;
+  }
+  :root[data-theme="blueprint"] .pane {
+    background-image:
+      linear-gradient(color-mix(in srgb, var(--line) 55%, transparent) 1px, transparent 1px),
+      linear-gradient(90deg, color-mix(in srgb, var(--line) 55%, transparent) 1px, transparent 1px);
+    background-size: 24px 24px;
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
   body {
     margin: 0; background: var(--bg); color: var(--fg); overflow: hidden;
     display: flex; flex-direction: column;
-    font: 13.5px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    font: 13.5px/1.55 "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   }
   button, input, select { font: inherit; color: inherit; }
+  input[type=number], table, #modelinfo, #plateinfo, #zoominfo, #info3d, #printer-digest {
+    font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px;
+  }
+  input[type=checkbox], input[type=range] { accent-color: var(--accent); }
 
   header {
     flex: none; height: 46px; padding: 0 14px; display: flex; align-items: center; gap: 12px;
@@ -82,7 +115,7 @@
     cursor: pointer; user-select: none; background: var(--bg);
     display: inline-flex; align-items: center; gap: 5px;
   }
-  .chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
   .chip .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: .35; }
   .chip[data-overlap="crossing"] .dot { background: var(--infill); opacity: 1; }
   .chip[data-overlap="junction"] .dot { background: var(--hump); opacity: 1; }
@@ -90,7 +123,7 @@
 
   button.primary {
     width: 100%; padding: 8px; font-weight: 600; cursor: pointer;
-    background: var(--accent); color: #fff; border: 0; border-radius: 6px;
+    background: var(--accent); color: var(--on-accent); border: 0; border-radius: 6px;
   }
   button.primary:disabled { opacity: .45; cursor: not-allowed; }
   .tool {
@@ -184,6 +217,33 @@
   .tag { font-size: 10.5px; padding: 0 6px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
   .tag[data-v="crossing"] { color: var(--infill); border-color: currentColor; }
   .tag[data-v="junction"] { color: var(--hump); border-color: currentColor; }
+
+  /* The exported SVG carries fixed colours; on screen it follows the theme. */
+  #svgwrap .perimeter, #svgwrap .solid, #svgwrap .fiducial { stroke: var(--accent); }
+  #svgwrap .infill { stroke: var(--infill); }
+  #svgwrap .perimeter-outline, #svgwrap .solid-outline { fill: var(--accent); }
+  #svgwrap .infill-outline { fill: var(--infill); }
+  #svgwrap circle.fiducial { fill: var(--accent); stroke: none; }
+  #svgwrap text { fill: var(--label); }
+  #svgwrap #build-plate rect { stroke: var(--plate); }
+
+  /* hover tips: anything with a title gets one; labels say so with a dotted underline */
+  .rows > span[data-tip], .label[data-tip], .rows > span[title], .label[title] {
+    cursor: help; text-decoration: underline dotted color-mix(in srgb, var(--muted) 60%, transparent);
+    text-underline-offset: 3px;
+  }
+  .help {
+    width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--line); padding: 0;
+    background: var(--bg); color: var(--muted); font-size: 11px; line-height: 16px; cursor: help;
+  }
+  #tipbubble {
+    position: fixed; z-index: 200; max-width: 280px; padding: 6px 9px; border-radius: 6px;
+    background: var(--fg); color: var(--bg); font-size: 12px; line-height: 1.45;
+    pointer-events: none; white-space: pre-line; opacity: 0; transition: opacity .12s;
+    box-shadow: 0 4px 14px rgba(0,0,0,.18);
+  }
+  #tipbubble.on { opacity: 1; }
+  header select { width: auto; padding: 2px 6px; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -193,6 +253,11 @@
   <span class="muted" id="modelinfo">Drop an STL to begin</span>
   <span class="spacer"></span>
   <span class="muted" id="plateinfo"></span>
+  <select id="theme" aria-label="Colour theme" title="Colour theme">
+    <option value="">Auto</option><option value="paper">Paper</option>
+    <option value="graphite">Graphite</option><option value="blueprint">Blueprint</option>
+    <option value="soldermask">Solder mask</option>
+  </select>
 </header>
 
 <main>
@@ -206,57 +271,56 @@
     </div>
 
     <div>
-      <span class="label" title="Dot colour shows how the pattern treats its own beads.&#10;&#10;grey — never crosses itself, so the surface stays flat&#10;amber — bead ends meet at lattice nodes&#10;red — beads cross and leave a hump at every intersection&#10;&#10;Hover a pattern for what it does.">Patterns</span>
+      <span class="label" title="Dot colour: grey never crosses itself · amber beads meet at nodes · red beads cross and leave humps">Patterns</span>
       <div class="chips" id="patterns"></div>
     </div>
 
     <div>
-      <span class="label">Density %</span>
+      <span class="label" title="Infill densities to sweep. Every pattern is printed at each one.">Density %</span>
       <div class="chips" id="densities"></div>
     </div>
 
     <div>
-      <span class="label" title="Confine the sweep to part of the model, such as the sensing face, so a probe or tab is not filled with the pattern under test. With no modifiers the whole part is swept.">Sweep region</span>
+      <span class="label" title="Limit the sweep to part of the model, e.g. the sensing face. None = whole part.">Sweep region</span>
       <div class="pair" style="margin-top:6px">
         <button class="tool" id="add-cylinder" disabled>+ Cylinder</button>
         <button class="tool" id="add-box" disabled>+ Box</button>
       </div>
       <div id="modlist"></div>
       <div class="rows" id="outside-row" style="margin-top:8px; display:none">
-        <span title="What happens to the parts of the model outside every modifier">Outside</span>
+        <span title="What to print outside the modifiers">Outside</span>
         <select id="outside">
           <option value="solid">solid</option>
           <option value="skip">omit</option>
         </select>
       </div>
-      <div class="hint" id="modhint">Whole part is swept. Add a modifier to sweep only what it covers.</div>
     </div>
 
     <div class="rows">
-      <span>Perimeters</span><input type="number" id="perimeters" value="2" min="0" step="1">
-      <span>Solid skin layers</span><input type="number" id="solid_layers" value="0" min="0" step="1">
-      <span>Replicates</span><input type="number" id="replicates" value="1" min="1" step="1">
-      <span>100% references</span><input type="number" id="reference" value="1" min="0" step="1">
+      <span title="Wall loops per layer">Perimeters</span><input type="number" id="perimeters" value="2" min="0" step="1">
+      <span title="Fully solid top and bottom layers. 0 keeps every layer on the sweep.">Solid skin layers</span><input type="number" id="solid_layers" value="0" min="0" step="1">
+      <span title="Copies of each pattern × density">Replicates</span><input type="number" id="replicates" value="1" min="1" step="1">
+      <span title="Fully dense electrodes, on a row of their own">100% references</span><input type="number" id="reference" value="1" min="0" step="1">
     </div>
 
     <details class="tray" id="printer-tray">
       <summary><span class="label">Printer</span> <span class="muted" id="printer-digest"></span></summary>
       <div class="rows">
         <span>Preset</span><select id="printer"></select>
-        <span title="Build volume: width x depth x Z travel, in mm">Build plate mm</span>
+        <span title="Width × depth × Z travel">Build plate mm</span>
         <span class="trio">
           <input type="number" id="plate_x" value="220" min="1" step="10" title="width">
           <input type="number" id="plate_y" value="300" min="1" step="10" title="depth">
           <input type="number" id="z_travel" value="40" min="0.1" step="5" title="Z travel">
         </span>
-        <span title="Width of the bead the nozzle lays down. Sets the toolpath spacing and the SVG stroke width.">Extrusion width mm</span>
+        <span title="Bead width. Sets toolpath spacing.">Extrusion width mm</span>
         <input type="number" id="line_width" value="0.1" min="0.01" step="0.01">
         <span>Layer height mm</span><input type="number" id="layer_height" value="0.1" min="0.01" step="0.01">
-        <span title="Leave blank to use the layer height">First layer mm</span>
+        <span title="Blank = same as layer height">First layer mm</span>
         <input type="number" id="first_layer_height" value="" min="0.01" step="0.01" placeholder="same">
-        <span title="Keep-out border around the edge of the plate">Plate margin mm</span>
+        <span title="Keep-out border round the plate edge">Plate margin mm</span>
         <input type="number" id="margin" value="10" min="0" step="1">
-        <span title="Toolpath vertices closer together than this are dropped. Keep it well under the bead width.">Resolution mm</span>
+        <span title="Drop toolpath points closer than this. Keep well under the bead width.">Resolution mm</span>
         <input type="number" id="resolution" value="0.005" min="0" step="0.005">
       </div>
     </details>
@@ -264,25 +328,25 @@
     <details class="tray">
       <summary><span class="label">Model &amp; output</span></summary>
       <div class="rows">
-        <span>Units</span>
+        <span title="Units the STL was drawn in">Units</span>
         <select id="units">
           <option value="auto">auto</option><option value="mm">mm</option>
           <option value="cm">cm</option><option value="m">m</option><option value="in">in</option>
         </select>
-        <span>Scale</span><input type="number" id="scale" value="1" min="0.01" step="0.1">
-        <span>Rotate deg</span><input type="number" id="rotate" value="0" step="15">
-        <span>Layout</span>
+        <span title="Extra scale, after units">Scale</span><input type="number" id="scale" value="1" min="0.01" step="0.1">
+        <span title="Rotate about Z">Rotate deg</span><input type="number" id="rotate" value="0" step="15">
+        <span title="matrix: a row per pattern, a column per density · pack: fill the plate in order">Layout</span>
         <select id="layout"><option value="matrix">matrix</option><option value="pack">pack</option></select>
-        <span title="Gap left between neighbouring electrodes">Part gap mm</span>
+        <span title="Gap between electrodes">Part gap mm</span>
         <input type="number" id="gap" value="4" min="0" step="1">
-        <span>SVG</span>
+        <span title="stroke: toolpath centrelines · outline: deposited areas (hides crossings)">SVG</span>
         <select id="svg_mode">
           <option value="stroke">stroke</option><option value="outline">outline</option>
           <option value="both">both</option>
         </select>
-        <span title="Three alignment marks round the electrodes: a ring with a dot at its centre, at the same place in every layer and pass, to line each print up on the first. They are printed every time.">Alignment marks</span>
+        <span title="Three ring-and-dot marks, same place in every layer and pass, to line prints up">Alignment marks</span>
         <input type="checkbox" id="fiducials" checked style="justify-self:start">
-        <span title="How the GTL export is split. The NOVA fills Gerber artwork with Arachne rather than following its strokes, and Arachne mangles any place strips cross or meet. Print passes keeps every file free of junctions: walls first, then the infill in as many passes as it takes for no two strips in one to touch. One per layer writes each layer as drawn.">GTL files</span>
+        <span title="print passes: walls, then infill split so no strips touch in one file (the NOVA mangles junctions) · one per layer: as drawn">GTL files</span>
         <select id="gtl_mode">
           <option value="passes">print passes</option>
           <option value="layers">one per layer</option>
@@ -293,10 +357,10 @@
     <div>
       <button class="primary" id="run" disabled>Slice</button>
       <div class="pair" style="margin-top:6px">
-        <button class="tool" id="dl-svg" disabled>SVG</button>
-        <button class="tool" id="dl-json" disabled>Manifest</button>
+        <button class="tool" id="dl-svg" disabled title="Plate as SVG">SVG</button>
+        <button class="tool" id="dl-json" disabled title="Every electrode's settings and measurements, as JSON">Manifest</button>
         <button class="tool" id="dl-gtl" disabled
-                title="Gerber top copper for the NOVA, zipped. Files are named in print order: each layer's walls, then its infill passes. Set how it is split under Model &amp; output.">GTL</button>
+                title="Gerber for the NOVA, zipped, in print order">GTL</button>
       </div>
     </div>
   </aside>
@@ -307,7 +371,7 @@
       <button class="tab" id="tab-plate" role="tab" aria-selected="false" aria-controls="pane-plate">Plate</button>
       <button class="tab" id="tab-3d" role="tab" aria-selected="false" aria-controls="pane-3d">3D</button>
       <button class="tab" id="tab-paths" role="tab" aria-selected="false" aria-controls="pane-paths"
-              title="How the NOVA is likely to fill each GTL print pass with a tip of a given width">Toolpaths</button>
+              title="How the NOVA will likely fill each GTL pass">Toolpaths</button>
     </div>
 
     <div class="bar" id="bar-plate" style="display:none">
@@ -318,6 +382,7 @@
       <button class="tool" data-zoom="plate">Plate</button>
       <span class="spacer"></span>
       <span class="muted" id="zoominfo"></span>
+      <button class="help" type="button" title="Scroll to zoom · drag to pan">?</button>
     </div>
 
     <div class="bar" id="bar-model">
@@ -325,42 +390,43 @@
       <button class="tool" data-mview="top">Top</button>
       <button class="tool" data-mview="reset">Reset</button>
       <span class="spacer"></span>
-      <span class="muted">drag a modifier to move it &middot; alt-drag to raise it &middot; drag to orbit &middot; shift-drag to pan</span>
+      <button class="help" type="button" title="Drag: orbit · Shift-drag: pan · Scroll: zoom&#10;Drag a modifier to move it · Alt-drag to raise it">?</button>
     </div>
 
     <div class="bar" id="bar-3d" style="display:none">
       <label>Electrode <select id="pick3d" style="min-width:140px"></select></label>
       <label>Z&times; <input type="range" id="zex" min="1" max="60" value="20"></label>
       <label>Layer <select id="layer3d"><option value="all">all</option></select></label>
-      <label><input type="checkbox" id="showhumps" checked> Humps</label>
+      <label title="Crossings on the top layer"><input type="checkbox" id="showhumps" checked> Humps</label>
       <button class="tool" data-view3d="reset">Reset</button>
       <span class="spacer"></span>
       <span class="muted" id="info3d"></span>
+      <button class="help" type="button" title="Drag: orbit · Shift-drag: pan · Scroll: zoom">?</button>
     </div>
 
     <div class="pane" id="pane-plate" role="tabpanel">
       <div id="messages"></div>
-      <div id="svgwrap"><div class="empty">Drop an STL to begin.</div></div>
-      <div id="busy"><span id="busytext">slicing…</span></div>
+      <div id="svgwrap"><div class="empty">Drop an STL to begin</div></div>
+      <div id="busy"><span id="busytext">Slicing…</span></div>
     </div>
 
     <div class="pane on" id="pane-model" role="tabpanel">
       <canvas id="mcanvas"></canvas>
-      <div class="empty" id="emptymodel">Drop an STL to place modifiers on it.</div>
+      <div class="empty" id="emptymodel">Drop an STL to begin</div>
     </div>
 
     <div class="bar" id="bar-paths" style="display:none">
       <label>Electrode <select id="pickpaths" style="min-width:140px"></select></label>
       <label>Layer <select id="layerpaths"></select></label>
-      <label title="Width of the dispensing tip, in microns. The NOVA fills each pass's copper with beads this wide.">Tip &micro;m <input type="number" id="tip" value="100" min="10" max="2000" step="10" style="width:72px"></label>
+      <label title="Dispensing tip width">Tip &micro;m <input type="number" id="tip" value="100" min="10" max="2000" step="10" style="width:72px"></label>
       <label>Pass <select id="passpaths"><option value="all">all</option></select></label>
       <span class="spacer"></span>
       <span class="muted">
         <span class="swatch" style="background:var(--model)"></span> GTL copper
         &nbsp;<span class="swatch" style="background:var(--accent);opacity:.45"></span> tip
         &nbsp;<span class="swatch" style="background:var(--infill)"></span> unreachable
-        &middot; scroll to zoom, drag to pan, double-click to fit
       </span>
+      <button class="help" type="button" title="Scroll: zoom · drag: pan · double-click: fit">?</button>
     </div>
 
     <div class="pane" id="pane-paths" role="tabpanel">
@@ -374,7 +440,7 @@
     </div>
 
     <details open>
-      <summary>Measurements &middot; hover a column for what it means &middot; click a row to see it in 3D</summary>
+      <summary title="Hover a column for its meaning · click a row to view it in 3D">Measurements</summary>
       <div class="inner" style="overflow-x:auto">
         <table id="stats">
           <thead><tr>
@@ -425,6 +491,51 @@
   let preset = { plate_x: 220, plate_y: 300, z_travel: 40, line_width: 0.1,
                  layer_height: 0.1, margin: 10, resolution: 0.005, gap: 4 };
   let printers = {};
+
+  // =====================================================================
+  // hover tips: every [title] shows in one styled bubble instead of the
+  // browser's slow native tooltip.  Titles set later by the script are
+  // picked up on the next hover.
+  // =====================================================================
+  const bubble = document.createElement("div");
+  bubble.id = "tipbubble"; bubble.setAttribute("role", "tooltip");
+  document.body.append(bubble);
+  let tipFor = null, tipTimer = null;
+  const hideTip = () => { clearTimeout(tipTimer); tipFor = null; bubble.classList.remove("on"); };
+  document.addEventListener("pointerover", (e) => {
+    const t = e.target.closest && e.target.closest("[title], [data-tip]");
+    if (t === tipFor) return;
+    hideTip();
+    if (!t) return;
+    if (t.hasAttribute("title")) { t.dataset.tip = t.title; t.removeAttribute("title"); }
+    if (!t.dataset.tip) return;
+    tipFor = t;
+    tipTimer = setTimeout(() => {
+      bubble.textContent = t.dataset.tip;
+      const r = t.getBoundingClientRect(), b = bubble.getBoundingClientRect();
+      const below = r.bottom + 6 + b.height < window.innerHeight;
+      bubble.style.left = `${clamp(r.left + r.width / 2 - b.width / 2, 8, window.innerWidth - b.width - 8)}px`;
+      bubble.style.top = `${below ? r.bottom + 6 : r.top - b.height - 6}px`;
+      bubble.classList.add("on");
+    }, 300);
+  });
+  document.addEventListener("pointerdown", hideTip);
+  document.addEventListener("scroll", hideTip, true);
+
+  // =====================================================================
+  // theme
+  // =====================================================================
+  $("theme").value = document.documentElement.dataset.theme || "";
+  $("theme").addEventListener("change", () => {
+    const t = $("theme").value;
+    if (t) document.documentElement.dataset.theme = t;
+    else delete document.documentElement.dataset.theme;
+    try { t ? localStorage.setItem("theme", t) : localStorage.removeItem("theme"); } catch {}
+    meshLayer = null; drawModel(); draw3d();   // canvases read the colours when they paint
+  });
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+    if (!document.documentElement.dataset.theme) { meshLayer = null; drawModel(); draw3d(); }
+  });
 
   // =====================================================================
   // controls
@@ -611,10 +722,7 @@
       message("warn", "Pick at least one pattern and one density."); return;
     }
     const planned = req.patterns.length * req.densities.length * req.replicates + req.reference;
-    $("busytext").textContent = state.everSliced
-      ? `slicing ${planned} electrodes…`
-      : `slicing ${planned} electrodes… the first run does all the geometry; ` +
-        `later changes reuse it`;
+    $("busytext").textContent = `Slicing ${planned} electrodes…`;
     state.busy = true; $("busy").classList.add("on"); $("run").disabled = true;
     try {
       const res = await fetch("/api/slice", {
@@ -651,13 +759,12 @@
     $("plateinfo").textContent =
       `${data.electrodes} electrodes · ${data.layers} layer${data.layers === 1 ? "" : "s"} · plate ${data.plate[0]}×${data.plate[1]} mm`;
 
-    if (data.warnings.length) message("warn", "Worth checking before you print", data.warnings);
+    if (data.warnings.length) message("warn", "Check before printing", data.warnings);
     // The notes live on the plate tab; say so from whichever tab is showing.
     $("tab-plate").textContent = data.warnings.length ? `Plate (${data.warnings.length} ⚠)` : "Plate";
     $("tab-plate").title = data.warnings.length ? "Warnings about this plate are shown here" : "";
     if ($("svg_mode").value === "outline") {
-      message("warn", "Outline mode hides the effect you are measuring",
-        ["Unioning the beads into flat regions discards the record of a bead being laid over another. Use stroke mode to keep the crossings."]);
+      message("warn", "Outline mode hides crossings — use stroke to see them");
     }
 
     const keep = $("layer").value;
@@ -1137,9 +1244,6 @@
     });
     const any = state.modifiers.length > 0;
     $("outside-row").style.display = any ? "" : "none";
-    $("modhint").textContent = any
-      ? "Only what the modifiers cover is swept, and its density is measured there alone."
-      : "Whole part is swept. Add a modifier to sweep only what it covers.";
     drawModel();
   }
 

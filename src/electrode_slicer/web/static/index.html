@@ -6,217 +6,305 @@
 <title>Electrode Slicer</title>
 <script>
   // Before first paint, so a chosen theme never flashes the default.
-  try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch {}
+  try {
+    const t = localStorage.getItem("theme");
+    if (["paper", "paperdark"].includes(t)) document.documentElement.dataset.theme = t;
+  } catch {}
 </script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap">
+<!-- Material Design 3, as plain HTML: https://www.beercss.com -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/beercss@5.0.3/dist/cdn/beer.min.css">
+<script type="module" src="https://cdn.jsdelivr.net/npm/beercss@5.0.3/dist/cdn/beer.min.js"></script>
 <style>
-  /* Themes.  "auto" (no data-theme) is Paper in light mode and Graphite in
-     dark.  --model must stay six-digit hex: the model view shades it per face. */
-  :root, :root[data-theme="paper"] {
-    --bg: #fbf9f4; --sunk: #f3efe6; --fg: #24211c; --muted: #7a7366; --line: #e2dccf;
-    --accent: #2b5d5a; --on-accent: #ffffff;
+  /* Themes, as Material 3 colour roles.  Beer CSS's script puts its own
+     purple palette on body.light / body.dark, so every theme names body too.
+     "auto" (no data-theme) is Paper in light mode and Paper Dark in dark.
+     The last group of each theme is the slicer's own: --model must stay
+     six-digit hex, because the model view shades it per face. */
+  :root, :root body,
+  :root[data-theme="paper"], :root[data-theme="paper"] body {
+    --primary: #2b5d5a; --on-primary: #ffffff;
+    --primary-container: #d4e6e3; --on-primary-container: #173b39;
+    --secondary: #6b6457; --on-secondary: #ffffff;
+    --secondary-container: #ebe5d8; --on-secondary-container: #3d382f;
+    --tertiary: #c4472d; --on-tertiary: #ffffff;
+    --tertiary-container: #f6ddd6; --on-tertiary-container: #6a2414;
+    --error: #c4472d; --on-error: #ffffff; --error-container: #f6ddd6; --on-error-container: #6a2414;
+    --background: #fbf9f4; --on-background: #24211c;
+    --surface: #fbf9f4; --on-surface: #24211c;
+    --surface-variant: #ebe5d8; --on-surface-variant: #7a7366;
+    --outline: #a39b8c; --outline-variant: #e2dccf;
+    --shadow: #000000; --scrim: #000000;
+    --inverse-surface: #24211c; --inverse-on-surface: #fbf9f4; --inverse-primary: #8fc5bf;
+    --surface-dim: #ece7dc; --surface-bright: #fffdf8;
+    --surface-container-lowest: #fffdf8; --surface-container-low: #f3efe6;
+    --surface-container: #efeadf; --surface-container-high: #e9e3d6;
+    --surface-container-highest: #e2dccf;
     --infill: #c4472d; --hump: #d99a2b; --solid: #9a9283; --model: #c9c1b0;
     --label: #4a453d; --plate: #b7af9f;
   }
   @media (prefers-color-scheme: dark) {
-    :root:not([data-theme]) {
-      --bg: #17191c; --sunk: #111315; --fg: #e6e6e3; --muted: #8b9096; --line: #2a2e33;
-      --accent: #4fd1c5; --on-accent: #0b1414;
-      --infill: #ff6b57; --hump: #f5b841; --solid: #6b7178; --model: #5a6068;
-      --label: #b9bcc0; --plate: #4a5057;
+    :root:not([data-theme]), :root:not([data-theme]) body {
+      --primary: #7fbfb8; --on-primary: #0f2624;
+      --primary-container: #234744; --on-primary-container: #c8e6e2;
+      --secondary: #b8ae9c; --on-secondary: #2a261f;
+      --secondary-container: #3a352d; --on-secondary-container: #e8e2d6;
+      --tertiary: #e7866d; --on-tertiary: #2a120b;
+      --tertiary-container: #5a2a1e; --on-tertiary-container: #f8d5cb;
+      --error: #e7866d; --on-error: #2a120b; --error-container: #5a2a1e; --on-error-container: #f8d5cb;
+      --background: #1c1a17; --on-background: #e8e2d6;
+      --surface: #1c1a17; --on-surface: #e8e2d6;
+      --surface-variant: #3a3630; --on-surface-variant: #a39b8c;
+      --outline: #7a7366; --outline-variant: #3a3630;
+      --shadow: #000000; --scrim: #000000;
+      --inverse-surface: #e8e2d6; --inverse-on-surface: #24211c; --inverse-primary: #2b5d5a;
+      --surface-dim: #171512; --surface-bright: #3a3630;
+      --surface-container-lowest: #151310; --surface-container-low: #22201c;
+      --surface-container: #282521; --surface-container-high: #2f2c27;
+      --surface-container-highest: #38342e;
+      --infill: #e7866d; --hump: #e6b04f; --solid: #7a7366; --model: #8a8274;
+      --label: #c9c1b0; --plate: #5a5449;
     }
   }
-  :root[data-theme="graphite"] {
-    --bg: #17191c; --sunk: #111315; --fg: #e6e6e3; --muted: #8b9096; --line: #2a2e33;
-    --accent: #4fd1c5; --on-accent: #0b1414;
-    --infill: #ff6b57; --hump: #f5b841; --solid: #6b7178; --model: #5a6068;
-    --label: #b9bcc0; --plate: #4a5057;
+  :root[data-theme="paperdark"], :root[data-theme="paperdark"] body {
+    --primary: #7fbfb8; --on-primary: #0f2624;
+    --primary-container: #234744; --on-primary-container: #c8e6e2;
+    --secondary: #b8ae9c; --on-secondary: #2a261f;
+    --secondary-container: #3a352d; --on-secondary-container: #e8e2d6;
+    --tertiary: #e7866d; --on-tertiary: #2a120b;
+    --tertiary-container: #5a2a1e; --on-tertiary-container: #f8d5cb;
+    --error: #e7866d; --on-error: #2a120b; --error-container: #5a2a1e; --on-error-container: #f8d5cb;
+    --background: #1c1a17; --on-background: #e8e2d6;
+    --surface: #1c1a17; --on-surface: #e8e2d6;
+    --surface-variant: #3a3630; --on-surface-variant: #a39b8c;
+    --outline: #7a7366; --outline-variant: #3a3630;
+    --shadow: #000000; --scrim: #000000;
+    --inverse-surface: #e8e2d6; --inverse-on-surface: #24211c; --inverse-primary: #2b5d5a;
+    --surface-dim: #171512; --surface-bright: #3a3630;
+    --surface-container-lowest: #151310; --surface-container-low: #22201c;
+    --surface-container: #282521; --surface-container-high: #2f2c27;
+    --surface-container-highest: #38342e;
+    --infill: #e7866d; --hump: #e6b04f; --solid: #7a7366; --model: #8a8274;
+    --label: #c9c1b0; --plate: #5a5449;
   }
-  :root[data-theme="blueprint"] {
-    --bg: #0f2742; --sunk: #0b1f36; --fg: #e4eefa; --muted: #8fa9c7; --line: #224468;
-    --accent: #7fd0ff; --on-accent: #06213a;
-    --infill: #ff7a6b; --hump: #ffd166; --solid: #6f8bab; --model: #5d7a9c;
-    --label: #b8cde6; --plate: #3d6390;
+
+  /* The slicer's own names for the roles it draws with (the canvases read
+     these), and Beer CSS's type and icon settings. */
+  :root, body {
+    --bg: var(--surface); --sunk: var(--surface-container-low); --fg: var(--on-surface);
+    --muted: var(--on-surface-variant); --line: var(--outline-variant);
+    --accent: var(--primary); --on-accent: var(--on-primary);
+    --font: Inter, ui-sans-serif, system-ui, sans-serif;
+    --font-icon: "Material Symbols Rounded";
+    --mono: "IBM Plex Mono", ui-monospace, monospace;
   }
-  :root[data-theme="soldermask"] {
-    --bg: #10241c; --sunk: #0b1b15; --fg: #e8efe9; --muted: #8fa79a; --line: #22402f;
-    --accent: #d8924f; --on-accent: #1a0f05;
-    --infill: #ff6b6b; --hump: #ffe066; --solid: #6e8a7b; --model: #4f6b5d;
-    --label: #c4d4ca; --plate: #3a5c49;
-  }
-  :root[data-theme="blueprint"] .pane {
-    background-image:
-      linear-gradient(color-mix(in srgb, var(--line) 55%, transparent) 1px, transparent 1px),
-      linear-gradient(90deg, color-mix(in srgb, var(--line) 55%, transparent) 1px, transparent 1px);
-    background-size: 24px 24px;
-  }
-  * { box-sizing: border-box; }
+
+  /* ---------------------------------------------------------------- frame */
   html, body { height: 100%; }
   body {
-    margin: 0; background: var(--bg); color: var(--fg); overflow: hidden;
-    display: flex; flex-direction: column;
-    font: 13.5px/1.55 "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; flex-direction: column; overflow: hidden;
+    background: var(--surface); color: var(--on-surface); font-size: 0.875rem;
   }
-  button, input, select { font: inherit; color: inherit; }
-  input[type=number], table, #modelinfo, #plateinfo, #zoominfo, #info3d, #printer-digest {
-    font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px;
-  }
-  input[type=checkbox], input[type=range] { accent-color: var(--accent); }
-
   header {
-    flex: none; height: 46px; padding: 0 14px; display: flex; align-items: center; gap: 12px;
-    border-bottom: 1px solid var(--line);
+    flex: none; display: flex; align-items: center; gap: 0.75rem;
+    padding: 0.5rem 1rem; min-block-size: 3.5rem;
+    background: var(--surface-container-low); border-block-end: 1px solid var(--outline-variant);
   }
-  header b { font-weight: 600; }
-  .muted { color: var(--muted); font-size: 12.5px; }
+  header .brand { display: inline-flex; align-items: center; gap: 0.5rem; font-size: 1.125rem; font-weight: 600; }
+  header .brand i { color: var(--primary); }
+  .muted { color: var(--on-surface-variant); font-size: 0.8125rem; }
+  .mono, #modelinfo, #plateinfo, #zoominfo, #info3d, #printer-digest, table, input[type=number] {
+    font-family: var(--mono);
+  }
+  .spacer { flex: 1; }
+  #theme-field { inline-size: 11.5rem; margin: 0; }
 
-  main { flex: 1; min-height: 0; display: grid; grid-template-columns: 290px minmax(0, 1fr); }
-  aside {
-    overflow-y: auto; padding: 14px; background: var(--sunk);
-    border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 14px;
+  main {
+    flex: 1; min-block-size: 0; padding: 0; overflow: hidden;
+    display: grid; grid-template-columns: 20rem minmax(0, 1fr);
   }
-  .stage { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+  aside {
+    overflow-y: auto; padding: 1rem; background: var(--surface-container-low);
+    display: flex; flex-direction: column; gap: 1.25rem;
+  }
+  .stage { min-inline-size: 0; min-block-size: 0; display: flex; flex-direction: column; }
   @media (max-width: 860px) {
     body { overflow: auto; }
-    main { grid-template-columns: 1fr; }
-    aside { border-right: 0; border-bottom: 1px solid var(--line); }
-    .stage { height: 78vh; }
+    main { flex: none; overflow: visible; grid-template-columns: 1fr; }
+    aside { overflow: visible; }
+    .stage { block-size: 78vh; }
+    aside .runbar { position: static; margin-block-start: 0; }
+    header { flex-wrap: wrap; row-gap: 0.25rem; }
+    #modelinfo, #plateinfo { order: 1; flex-basis: 100%; }
+    .tabs { overflow-x: auto; }
+    .tabs > a { padding-inline: 0.75rem; }
+    .tabs > a i { display: none; }
   }
 
-  /* one shared label style, used for the only two headings left */
-  .label { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  /* -------------------------------------------------------------- sidebar */
+  .section-title {
+    display: flex; align-items: center; gap: 0.375rem; margin-block-end: 0.5rem;
+    font-size: 0.75rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--on-surface-variant);
+  }
+  .section-title i { --_size: 1.125rem; }
+  .section-title[data-tip], .section-title[title] { cursor: help; }
 
   #drop {
-    border: 1.5px dashed var(--line); border-radius: 7px; padding: 16px 10px; text-align: center;
-    color: var(--muted); cursor: pointer; background: var(--bg);
+    display: flex; flex-direction: column; align-items: center; gap: 0.25rem;
+    padding: 1.25rem 0.75rem; text-align: center; cursor: pointer; border-radius: 1rem;
+    border: 1.5px dashed var(--outline); background: var(--surface); color: var(--on-surface-variant);
+    transition: border-color var(--speed2), background-color var(--speed2);
   }
-  #drop:hover, #drop.over { border-color: var(--accent); }
-  #drop strong { display: block; color: var(--fg); font-weight: 600; }
-  #drop small { font-size: 11.5px; }
+  #drop i { --_size: 2rem; color: var(--primary); }
+  #drop:hover, #drop.over { border-color: var(--primary); background: var(--primary-container); }
+  #drop strong { color: var(--on-surface); font-weight: 600; }
+  #drop small { font-size: 0.75rem; }
 
-  .rows { display: grid; grid-template-columns: 1fr 96px; gap: 6px 10px; align-items: center; }
-  .rows > span { color: var(--muted); font-size: 12.5px; }
-  input[type=number], select {
-    width: 100%; padding: 3px 6px; background: var(--bg);
-    border: 1px solid var(--line); border-radius: 5px;
+  .chips { display: flex; flex-wrap: wrap; gap: 0.375rem; }
+  .chips .chip { --_size: 1.875rem; --_padding: 0.625rem; gap: 0.375rem; font-size: 0.8125rem; }
+  .chip[aria-pressed="true"] {
+    background: color-mix(in srgb, var(--primary) 26%, var(--surface)); color: var(--on-surface);
+    border-color: transparent; font-weight: 600;
+  }
+  .chip .dot { inline-size: 0.5rem; block-size: 0.5rem; border-radius: 50%; background: var(--outline); }
+  .chip[data-overlap="crossing"] .dot { background: var(--infill); }
+  .chip[data-overlap="junction"] .dot { background: var(--hump); }
+
+  /* Material outlined fields, two to a row */
+  .fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem 0.5rem; }
+  .fields > .wide { grid-column: 1 / -1; }
+  /* Beer CSS spaces out a .field that follows another; grids and bars space their own. */
+  :is(.fields, .trio, .bar, .pair, .actions) > * { margin: 0 !important; }
+  .field > :is(input, select) { min-inline-size: 0; inline-size: 100%; white-space: nowrap; }
+  .field.small > :is(input, select) { font-size: 0.875rem; }
+  .field[data-tip], .field[title] { cursor: help; }
+  .field label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .trio { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.375rem; }
+  .actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.375rem; margin-block-start: 0.5rem; }
+  .actions button { margin: 0; padding: 0 0.5rem; }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0.375rem; }
+  .pair button { margin: 0; }
+  #run { inline-size: 100%; margin: 0; box-sizing: border-box; }
+  /* Slice and the downloads stay in reach however far the settings scroll. */
+  .runbar {
+    position: sticky; inset-block-end: -1rem; margin: auto -1rem -1rem; padding: 0.75rem 1rem 1rem;
+    background: var(--surface-container-low); border-block-start: 1px solid var(--outline-variant); z-index: 2;
   }
 
-  .tray > summary { padding: 0; list-style-position: outside; }
-  .tray > summary::marker { color: var(--muted); }
-  .tray > .rows { margin-top: 8px; }
-  .trio { display: flex; gap: 4px; }
-  .trio input { width: 100%; min-width: 0; text-align: right; }
+  details.tray { border-radius: 0.75rem; background: var(--surface); border: 1px solid var(--outline-variant); }
+  details.tray > summary {
+    display: flex; align-items: center; gap: 0.5rem; padding: 0.625rem 0.75rem;
+    font-weight: 500;
+  }
+  details.tray > summary .muted { flex: 1; text-align: end; font-size: 0.75rem; white-space: nowrap; }
+  details.tray > summary > i:last-child { transition: transform var(--speed2); color: var(--on-surface-variant); }
+  details.tray[open] > summary > i:last-child { transform: rotate(180deg); }
+  details.tray > .fields { padding: 0.5rem 0.75rem 0.875rem; }
 
-  .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
-  .chip {
-    border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px; font-size: 12px;
-    cursor: pointer; user-select: none; background: var(--bg);
-    display: inline-flex; align-items: center; gap: 5px;
+  .mod {
+    border: 1px solid var(--outline-variant); border-radius: 0.75rem; padding: 0.5rem 0.625rem 0.625rem;
+    margin-block-start: 0.5rem; background: var(--surface); cursor: pointer;
   }
-  .chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-  .chip .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: .35; }
-  .chip[data-overlap="crossing"] .dot { background: var(--infill); opacity: 1; }
-  .chip[data-overlap="junction"] .dot { background: var(--hump); opacity: 1; }
-  .chip[aria-pressed="true"] .dot { opacity: 1; }
+  .mod[aria-current="true"] { border-color: var(--hump); box-shadow: inset 3px 0 0 var(--hump); }
+  .mod .head { display: flex; align-items: center; gap: 0.375rem; margin-block-end: 0.5rem; font-weight: 500; }
+  .mod .head i:first-child { --_size: 1.125rem; color: var(--on-surface-variant); }
+  .mod .head b { flex: 1; font-weight: 500; }
+  .mod .head button { margin: 0; }
+  .mod > div + div { margin-block-start: 0.5rem; }
+  #outside-field { margin-block-start: 0.75rem; }
 
-  button.primary {
-    width: 100%; padding: 8px; font-weight: 600; cursor: pointer;
-    background: var(--accent); color: var(--on-accent); border: 0; border-radius: 6px;
-  }
-  button.primary:disabled { opacity: .45; cursor: not-allowed; }
-  .tool {
-    padding: 4px 9px; font-size: 12.5px; cursor: pointer; background: var(--bg);
-    border: 1px solid var(--line); border-radius: 5px;
-  }
-  .tool:hover:not(:disabled) { border-color: var(--accent); }
-  .tool:disabled { opacity: .45; cursor: not-allowed; }
-  .pair { display: flex; gap: 6px; }
-  .pair .tool { flex: 1; }
-
-  .tabs { flex: none; display: flex; border-bottom: 1px solid var(--line); }
-  .tab {
-    padding: 8px 16px; font-size: 13px; cursor: pointer; background: none; border: 0;
-    border-bottom: 2px solid transparent; color: var(--muted);
-  }
-  .tab[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); font-weight: 600; }
+  /* ---------------------------------------------------------------- stage */
+  .tabs { flex: none; padding-inline: 0.5rem; }
+  .tabs > a { inline-size: auto; padding-inline: 1.25rem; }
+  .tabs > a i { --_size: 1.25rem; }
 
   .bar {
-    flex: none; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
-    padding: 7px 12px; border-bottom: 1px solid var(--line);
+    flex: none; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;
+    padding: 0.5rem 0.75rem; border-block-end: 1px solid var(--outline-variant);
   }
-  .bar label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12.5px; }
-  .bar select { width: auto; min-width: 0; }
-  .bar input[type=range] { width: 92px; }
-  .spacer { flex: 1; }
+  .bar > * { margin: 0 !important; }
+  .bar .field { inline-size: 8.5rem; }
+  .bar .field.narrow { inline-size: 7rem; }
+  .bar .field.wide { inline-size: 11rem; }
+  .bar .slider { inline-size: 7.5rem; }
+  .bar .zlabel { display: inline-flex; align-items: center; gap: 0.5rem; color: var(--on-surface-variant); }
+  .legend { display: inline-flex; align-items: center; gap: 0.375rem 0.75rem; flex-wrap: wrap; font-size: 0.8125rem; }
+  .swatch { display: inline-block; inline-size: 0.625rem; block-size: 0.625rem; border-radius: 3px; margin-inline-end: 0.25rem; }
 
-  .pane { flex: 1; min-height: 0; position: relative; display: none; }
+  .pane { flex: 1; min-block-size: 0; position: relative; display: none; }
   .pane.on { display: block; }
-  .mod { border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; margin-top: 6px;
-         background: var(--bg); cursor: pointer; }
-  .mod[aria-current="true"] { border-color: var(--hump); box-shadow: inset 3px 0 0 var(--hump); }
-  .mod .head { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
-  .mod .head b { font-weight: 600; flex: 1; }
-  .mod .head button { border: 0; background: none; color: var(--muted); cursor: pointer; padding: 0 2px; font-size: 14px; }
-  .mod .head button:hover { color: var(--infill); }
-  .mod .rows { grid-template-columns: 52px 1fr; margin-top: 4px; }
-  .hint { font-size: 11.5px; color: var(--muted); margin-top: 4px; }
-  #mcanvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: grab; display: block; }
+  #mcanvas { position: absolute; inset: 0; inline-size: 100%; block-size: 100%; touch-action: none; cursor: grab; display: block; }
   #mcanvas.drag { cursor: grabbing; }
   #mcanvas.over { cursor: move; }
-  #svgwrap, #canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #svgwrap, #canvas { position: absolute; inset: 0; inline-size: 100%; block-size: 100%; }
   #svgwrap { overflow: hidden; cursor: grab; touch-action: none; }
   #svgwrap.drag, #canvas.drag { cursor: grabbing; }
-  #svgwrap svg { width: 100%; height: 100%; display: block; }
+  #svgwrap svg { inline-size: 100%; block-size: 100%; display: block; }
+  /* Beer CSS's body letter-spacing is in rem; in an SVG drawn in millimetres it is enormous. */
+  svg { letter-spacing: normal; }
   #canvas { touch-action: none; cursor: grab; display: block; }
   #pathswrap {
-    position: absolute; inset: 0; overflow: auto; padding: 12px;
-    display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    position: absolute; inset: 0; overflow: auto; padding: 0.75rem;
+    display: grid; gap: 0.75rem; grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr));
     align-content: start;
   }
   #pathswrap.one { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr); align-content: stretch; }
-  .card { border: 1px solid var(--line); border-radius: 7px; background: var(--bg);
-          display: flex; flex-direction: column; min-height: 260px; }
-  .card h4 { margin: 0; padding: 6px 10px; font-size: 12.5px; font-weight: 600; flex-wrap: wrap;
-             border-bottom: 1px solid var(--line); display: flex; gap: 2px 8px; align-items: baseline; }
+  .card {
+    margin: 0; border-radius: 0.75rem; background: var(--surface-container-low);
+    display: flex; flex-direction: column; min-block-size: 16rem; overflow: hidden;
+  }
+  .card h4 {
+    margin: 0; padding: 0.5rem 0.75rem; font-size: 0.8125rem; font-weight: 600; flex-wrap: wrap;
+    display: flex; gap: 0.125rem 0.5rem; align-items: baseline; border-radius: 0;
+  }
   .card h4 > * { white-space: nowrap; }
   .card h4 .muted { font-weight: 400; }
-  .card h4 .bad { margin-left: auto; }
-  .card svg { flex: 1; width: 100%; min-height: 0; display: block; cursor: grab; touch-action: none; }
+  .card h4 .bad { margin-inline-start: auto; }
+  .card svg { flex: 1; inline-size: 100%; min-block-size: 0; display: block; cursor: grab; touch-action: none; border-radius: 0; }
   .card svg.drag { cursor: grabbing; }
-  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px; }
+
   .empty, #busy {
     position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-    color: var(--muted); font-size: 13px; text-align: center; padding: 20px;
+    color: var(--on-surface-variant); text-align: center; padding: 1.25rem; gap: 0.75rem;
   }
-  #busy { display: none; background: color-mix(in srgb, var(--bg) 72%, transparent); z-index: 5; }
+  .empty i { --_size: 2.5rem; opacity: 0.6; }
+  .empty { flex-direction: column; }
+  #busy { display: none; flex-direction: column; background: color-mix(in srgb, var(--surface) 72%, transparent); z-index: 5; }
   #busy.on { display: flex; }
 
-  #messages { position: absolute; top: 10px; left: 10px; right: 10px; z-index: 6; pointer-events: none; }
+  #messages { position: absolute; inset: 0.75rem 0.75rem auto; z-index: 6; pointer-events: none; }
   .note {
-    font-size: 12px; padding: 8px 10px; margin-bottom: 8px; pointer-events: auto;
-    background: var(--bg); border: 1px solid var(--line); border-left: 3px solid var(--muted);
-    border-radius: 5px;
+    font-size: 0.8125rem; padding: 0.625rem 0.875rem; margin-block-end: 0.5rem; pointer-events: auto;
+    border-radius: 0.75rem; background: var(--surface-container-high); color: var(--on-surface);
   }
-  .note.warn { border-left-color: var(--hump); }
-  .note.err { border-left-color: var(--infill); }
-  .note ul { margin: 4px 0 0; padding-left: 18px; }
+  .note.warn { background: color-mix(in srgb, var(--hump) 22%, var(--surface)); }
+  .note.err { background: var(--error-container); color: var(--on-error-container); }
+  .note ul { margin: 0.25rem 0 0; padding-inline-start: 1.125rem; }
 
-  details { flex: none; max-height: 38vh; overflow: auto; border-top: 1px solid var(--line); }
-  details.tray { max-height: none; overflow: visible; border-top: 0; }
-  summary { padding: 7px 12px; cursor: pointer; color: var(--muted); font-size: 12.5px; }
-  .inner { padding: 0 12px 12px; }
-  table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
-  th, td { text-align: right; padding: 4px 7px; border-bottom: 1px solid var(--line); white-space: nowrap; }
-  th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
-  th { color: var(--muted); font-weight: 500; font-size: 11px; cursor: help; }
+  details#results { flex: none; max-block-size: 38vh; overflow: auto; border-block-start: 1px solid var(--outline-variant); }
+  details#results > summary {
+    display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.875rem;
+    color: var(--on-surface-variant); font-weight: 500;
+  }
+  details#results > summary > i { --_size: 1.25rem; transition: transform var(--speed2); }
+  details#results:not([open]) > summary > i { transform: rotate(-90deg); }
+  .inner { padding: 0 0.75rem 0.75rem; overflow-x: auto; }
+  table { border-collapse: collapse; inline-size: 100%; font-size: 0.78rem; }
+  th, td { text-align: end; padding: 0.3rem 0.5rem; white-space: nowrap; border-block-end: 1px solid var(--outline-variant); }
+  th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: start; }
+  th { color: var(--on-surface-variant); font-weight: 500; font-size: 0.72rem; cursor: help; font-family: var(--font); }
   tbody tr { cursor: pointer; }
-  tbody tr:hover { background: var(--sunk); }
-  .bad { color: var(--infill); font-weight: 600; }
-  .tag { font-size: 10.5px; padding: 0 6px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
-  .tag[data-v="crossing"] { color: var(--infill); border-color: currentColor; }
-  .tag[data-v="junction"] { color: var(--hump); border-color: currentColor; }
+  tbody tr:hover { background: var(--surface-container); }
+  .bad { color: var(--error); font-weight: 600; }
+  .tag {
+    font-size: 0.7rem; padding: 0.0625rem 0.5rem; border-radius: 999px; font-family: var(--font);
+    background: var(--surface-container-high); color: var(--on-surface-variant);
+  }
+  .tag[data-v="crossing"] { background: color-mix(in srgb, var(--infill) 18%, transparent); color: var(--infill); }
+  .tag[data-v="junction"] { background: color-mix(in srgb, var(--hump) 22%, transparent); color: var(--on-surface); }
 
   /* The exported SVG carries fixed colours; on screen it follows the theme. */
   #svgwrap .perimeter, #svgwrap .solid, #svgwrap .fiducial { stroke: var(--accent); }
@@ -227,43 +315,37 @@
   #svgwrap text { fill: var(--label); }
   #svgwrap #build-plate rect { stroke: var(--plate); }
 
-  /* hover tips: anything with a title gets one; labels say so with a dotted underline */
-  .rows > span[data-tip], .label[data-tip], .rows > span[title], .label[title] {
-    cursor: help; text-decoration: underline dotted color-mix(in srgb, var(--muted) 60%, transparent);
-    text-underline-offset: 3px;
-  }
-  .help {
-    width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--line); padding: 0;
-    background: var(--bg); color: var(--muted); font-size: 11px; line-height: 16px; cursor: help;
-  }
+  /* Material plain tooltip, shared by every [title] on the page */
   #tipbubble {
-    position: fixed; z-index: 200; max-width: 280px; padding: 6px 9px; border-radius: 6px;
-    background: var(--fg); color: var(--bg); font-size: 12px; line-height: 1.45;
-    pointer-events: none; white-space: pre-line; opacity: 0; transition: opacity .12s;
-    box-shadow: 0 4px 14px rgba(0,0,0,.18);
+    position: fixed; z-index: 200; max-inline-size: 18rem; padding: 0.375rem 0.625rem; border-radius: 0.25rem;
+    background: var(--inverse-surface); color: var(--inverse-on-surface); font-size: 0.75rem; line-height: 1.45;
+    pointer-events: none; white-space: pre-line; opacity: 0; transition: opacity var(--speed1);
   }
   #tipbubble.on { opacity: 1; }
-  header select { width: auto; padding: 2px 6px; font-size: 12px; }
 </style>
 </head>
 <body>
 
 <header>
-  <b>Electrode Slicer</b>
+  <span class="brand"><i>bolt</i>Electrode Slicer</span>
   <span class="muted" id="modelinfo">Drop an STL to begin</span>
   <span class="spacer"></span>
   <span class="muted" id="plateinfo"></span>
-  <select id="theme" aria-label="Colour theme" title="Colour theme">
-    <option value="">Auto</option><option value="paper">Paper</option>
-    <option value="graphite">Graphite</option><option value="blueprint">Blueprint</option>
-    <option value="soldermask">Solder mask</option>
-  </select>
+  <div class="field small border prefix suffix round" id="theme-field" title="Colour theme">
+    <i>palette</i>
+    <select id="theme" aria-label="Colour theme">
+      <option value="">Auto</option><option value="paper">Paper</option>
+      <option value="paperdark">Paper Dark</option>
+    </select>
+    <i>arrow_drop_down</i>
+  </div>
 </header>
 
 <main>
   <aside>
-    <div>
+    <div class="dropwrap">
       <div id="drop" tabindex="0" role="button">
+        <i>upload_file</i>
         <strong>Drop an STL</strong>
         <small>or click to choose</small>
       </div>
@@ -271,143 +353,156 @@
     </div>
 
     <div>
-      <span class="label" title="Dot colour: grey never crosses itself · amber beads meet at nodes · red beads cross and leave humps">Patterns</span>
+      <div class="section-title" title="Dot colour: grey never crosses itself · amber beads meet at nodes · red beads cross and leave humps"><i>texture</i>Patterns</div>
       <div class="chips" id="patterns"></div>
     </div>
 
     <div>
-      <span class="label" title="Infill densities to sweep. Every pattern is printed at each one.">Density %</span>
+      <div class="section-title" title="Infill densities to sweep. Every pattern is printed at each one."><i>percent</i>Density</div>
       <div class="chips" id="densities"></div>
     </div>
 
     <div>
-      <span class="label" title="Limit the sweep to part of the model, e.g. the sensing face. None = whole part.">Sweep region</span>
-      <div class="pair" style="margin-top:6px">
-        <button class="tool" id="add-cylinder" disabled>+ Cylinder</button>
-        <button class="tool" id="add-box" disabled>+ Box</button>
+      <div class="section-title" title="Limit the sweep to part of the model, e.g. the sensing face. None = whole part."><i>select</i>Sweep region</div>
+      <div class="pair">
+        <button class="small border" id="add-cylinder" disabled><i>add</i><span>Cylinder</span></button>
+        <button class="small border" id="add-box" disabled><i>add</i><span>Box</span></button>
       </div>
       <div id="modlist"></div>
-      <div class="rows" id="outside-row" style="margin-top:8px; display:none">
-        <span title="What to print outside the modifiers">Outside</span>
+      <div class="field small border label suffix" id="outside-field" style="display:none" title="What to print outside the modifiers">
         <select id="outside">
           <option value="solid">solid</option>
           <option value="skip">omit</option>
         </select>
+        <label>Outside</label>
+        <i>arrow_drop_down</i>
       </div>
     </div>
 
-    <div class="rows">
-      <span title="Wall loops per layer">Perimeters</span><input type="number" id="perimeters" value="2" min="0" step="1">
-      <span title="Fully solid top and bottom layers. 0 keeps every layer on the sweep.">Solid skin layers</span><input type="number" id="solid_layers" value="0" min="0" step="1">
-      <span title="Copies of each pattern × density">Replicates</span><input type="number" id="replicates" value="1" min="1" step="1">
-      <span title="Fully dense electrodes, on a row of their own">100% references</span><input type="number" id="reference" value="1" min="0" step="1">
+    <div>
+      <div class="section-title"><i>tune</i>Electrodes</div>
+      <div class="fields">
+        <div class="field small border label" title="Wall loops per layer">
+          <input type="number" id="perimeters" value="2" min="0" step="1"><label>Perimeters</label></div>
+        <div class="field small border label" title="Fully solid top and bottom layers. 0 keeps every layer on the sweep.">
+          <input type="number" id="solid_layers" value="0" min="0" step="1"><label>Skin layers</label></div>
+        <div class="field small border label" title="Copies of each pattern × density">
+          <input type="number" id="replicates" value="1" min="1" step="1"><label>Replicates</label></div>
+        <div class="field small border label" title="Fully dense electrodes, on a row of their own">
+          <input type="number" id="reference" value="1" min="0" step="1"><label>100% refs</label></div>
+      </div>
     </div>
 
     <details class="tray" id="printer-tray">
-      <summary><span class="label">Printer</span> <span class="muted" id="printer-digest"></span></summary>
-      <div class="rows">
-        <span>Preset</span><select id="printer"></select>
-        <span title="Width × depth × Z travel">Build plate mm</span>
-        <span class="trio">
-          <input type="number" id="plate_x" value="220" min="1" step="10" title="width">
-          <input type="number" id="plate_y" value="300" min="1" step="10" title="depth">
-          <input type="number" id="z_travel" value="40" min="0.1" step="5" title="Z travel">
-        </span>
-        <span title="Bead width. Sets toolpath spacing.">Extrusion width mm</span>
-        <input type="number" id="line_width" value="0.1" min="0.01" step="0.01">
-        <span>Layer height mm</span><input type="number" id="layer_height" value="0.1" min="0.01" step="0.01">
-        <span title="Blank = same as layer height">First layer mm</span>
-        <input type="number" id="first_layer_height" value="" min="0.01" step="0.01" placeholder="same">
-        <span title="Keep-out border round the plate edge">Plate margin mm</span>
-        <input type="number" id="margin" value="10" min="0" step="1">
-        <span title="Drop toolpath points closer than this. Keep well under the bead width.">Resolution mm</span>
-        <input type="number" id="resolution" value="0.005" min="0" step="0.005">
+      <summary><i>print</i>Printer <span class="muted mono" id="printer-digest"></span><i>expand_more</i></summary>
+      <div class="fields">
+        <div class="field small border label suffix wide">
+          <select id="printer"></select><label>Preset</label><i>arrow_drop_down</i></div>
+        <div class="trio wide" title="Build volume, mm">
+          <div class="field small border label"><input type="number" id="plate_x" value="220" min="1" step="10"><label>Width</label></div>
+          <div class="field small border label"><input type="number" id="plate_y" value="300" min="1" step="10"><label>Depth</label></div>
+          <div class="field small border label"><input type="number" id="z_travel" value="40" min="0.1" step="5"><label>Z travel</label></div>
+        </div>
+        <div class="field small border label" title="Bead width, mm. Sets toolpath spacing.">
+          <input type="number" id="line_width" value="0.1" min="0.01" step="0.01"><label>Bead mm</label></div>
+        <div class="field small border label" title="Layer height, mm">
+          <input type="number" id="layer_height" value="0.1" min="0.01" step="0.01"><label>Layer mm</label></div>
+        <div class="field small border label" title="Blank = same as layer height">
+          <input type="number" id="first_layer_height" class="active" value="" min="0.01" step="0.01" placeholder="same"><label class="active">First layer mm</label></div>
+        <div class="field small border label" title="Keep-out border round the plate edge">
+          <input type="number" id="margin" value="10" min="0" step="1"><label>Margin mm</label></div>
+        <div class="field small border label wide" title="Drop toolpath points closer than this. Keep well under the bead width.">
+          <input type="number" id="resolution" value="0.005" min="0" step="0.005"><label>Resolution mm</label></div>
       </div>
     </details>
 
     <details class="tray">
-      <summary><span class="label">Model &amp; output</span></summary>
-      <div class="rows">
-        <span title="Units the STL was drawn in">Units</span>
-        <select id="units">
-          <option value="auto">auto</option><option value="mm">mm</option>
-          <option value="cm">cm</option><option value="m">m</option><option value="in">in</option>
-        </select>
-        <span title="Extra scale, after units">Scale</span><input type="number" id="scale" value="1" min="0.01" step="0.1">
-        <span title="Rotate about Z">Rotate deg</span><input type="number" id="rotate" value="0" step="15">
-        <span title="matrix: a row per pattern, a column per density · pack: fill the plate in order">Layout</span>
-        <select id="layout"><option value="matrix">matrix</option><option value="pack">pack</option></select>
-        <span title="Gap between electrodes">Part gap mm</span>
-        <input type="number" id="gap" value="4" min="0" step="1">
-        <span title="stroke: toolpath centrelines · outline: deposited areas (hides crossings)">SVG</span>
-        <select id="svg_mode">
-          <option value="stroke">stroke</option><option value="outline">outline</option>
-          <option value="both">both</option>
-        </select>
-        <span title="Three ring-and-dot marks, same place in every layer and pass, to line prints up">Alignment marks</span>
-        <input type="checkbox" id="fiducials" checked style="justify-self:start">
-        <span title="print passes: walls, then infill split so no strips touch in one file (the NOVA mangles junctions) · one per layer: as drawn">GTL files</span>
-        <select id="gtl_mode">
-          <option value="passes">print passes</option>
-          <option value="layers">one per layer</option>
-        </select>
+      <summary><i>settings</i>Model &amp; output<span class="spacer"></span><i>expand_more</i></summary>
+      <div class="fields">
+        <div class="field small border label suffix" title="Units the STL was drawn in">
+          <select id="units">
+            <option value="auto">auto</option><option value="mm">mm</option>
+            <option value="cm">cm</option><option value="m">m</option><option value="in">in</option>
+          </select><label>Units</label><i>arrow_drop_down</i></div>
+        <div class="field small border label" title="Extra scale, after units">
+          <input type="number" id="scale" value="1" min="0.01" step="0.1"><label>Scale</label></div>
+        <div class="field small border label" title="Rotate about Z">
+          <input type="number" id="rotate" value="0" step="15"><label>Rotate °</label></div>
+        <div class="field small border label" title="Gap between electrodes">
+          <input type="number" id="gap" value="4" min="0" step="1"><label>Part gap mm</label></div>
+        <div class="field small border label suffix" title="matrix: a row per pattern, a column per density · pack: fill the plate in order">
+          <select id="layout"><option value="matrix">matrix</option><option value="pack">pack</option></select>
+          <label>Layout</label><i>arrow_drop_down</i></div>
+        <div class="field small border label suffix" title="stroke: toolpath centrelines · outline: deposited areas (hides crossings)">
+          <select id="svg_mode">
+            <option value="stroke">stroke</option><option value="outline">outline</option>
+            <option value="both">both</option>
+          </select><label>SVG</label><i>arrow_drop_down</i></div>
+        <div class="field small border label suffix wide" title="print passes: walls, then infill split so no strips touch in one file (the NOVA mangles junctions) · one per layer: as drawn">
+          <select id="gtl_mode">
+            <option value="passes">print passes</option>
+            <option value="layers">one per layer</option>
+          </select><label>GTL files</label><i>arrow_drop_down</i></div>
+        <label class="checkbox wide" title="Three ring-and-dot marks, same place in every layer and pass, to line prints up">
+          <input type="checkbox" id="fiducials" checked><span>Alignment marks</span></label>
       </div>
     </details>
 
-    <div>
-      <button class="primary" id="run" disabled>Slice</button>
-      <div class="pair" style="margin-top:6px">
-        <button class="tool" id="dl-svg" disabled title="Plate as SVG">SVG</button>
-        <button class="tool" id="dl-json" disabled title="Every electrode's settings and measurements, as JSON">Manifest</button>
-        <button class="tool" id="dl-gtl" disabled
-                title="Gerber for the NOVA, zipped, in print order">GTL</button>
+    <div class="runbar">
+      <button class="large" id="run" disabled><i>play_arrow</i><span>Slice</span></button>
+      <div class="actions">
+        <button class="fill small" id="dl-svg" disabled title="Plate as SVG"><i>download</i><span>SVG</span></button>
+        <button class="fill small" id="dl-json" disabled title="Every electrode's settings and measurements, as JSON"><i>data_object</i><span>JSON</span></button>
+        <button class="fill small" id="dl-gtl" disabled title="Gerber for the NOVA, zipped, in print order"><i>memory</i><span>GTL</span></button>
       </div>
     </div>
   </aside>
 
-  <section class="stage">
-    <div class="tabs" role="tablist">
-      <button class="tab" id="tab-model" role="tab" aria-selected="true" aria-controls="pane-model">Model</button>
-      <button class="tab" id="tab-plate" role="tab" aria-selected="false" aria-controls="pane-plate">Plate</button>
-      <button class="tab" id="tab-3d" role="tab" aria-selected="false" aria-controls="pane-3d">3D</button>
-      <button class="tab" id="tab-paths" role="tab" aria-selected="false" aria-controls="pane-paths"
-              title="How the NOVA will likely fill each GTL pass">Toolpaths</button>
+  <section class="stage no-margin">
+    <div class="tabs left-align" role="tablist">
+      <a class="active" id="tab-model" role="tab" aria-selected="true" aria-controls="pane-model"><i>deployed_code</i><span>Model</span></a>
+      <a id="tab-plate" role="tab" aria-selected="false" aria-controls="pane-plate"><i>grid_view</i><span>Plate</span></a>
+      <a id="tab-3d" role="tab" aria-selected="false" aria-controls="pane-3d"><i>3d_rotation</i><span>3D</span></a>
+      <a id="tab-paths" role="tab" aria-selected="false" aria-controls="pane-paths"
+         title="How the NOVA will likely fill each GTL pass"><i>route</i><span>Toolpaths</span></a>
     </div>
 
     <div class="bar" id="bar-plate" style="display:none">
-      <label>Layer <select id="layer"><option value="all">all</option></select></label>
-      <button class="tool" data-zoom="in">+</button>
-      <button class="tool" data-zoom="out">&minus;</button>
-      <button class="tool" data-zoom="fit">Fit</button>
-      <button class="tool" data-zoom="plate">Plate</button>
+      <div class="field small border label suffix"><select id="layer"><option value="all">all</option></select><label>Layer</label><i>arrow_drop_down</i></div>
+      <button class="circle transparent" data-zoom="in" title="Zoom in"><i>zoom_in</i></button>
+      <button class="circle transparent" data-zoom="out" title="Zoom out"><i>zoom_out</i></button>
+      <button class="circle transparent" data-zoom="fit" title="Fit the electrodes"><i>fit_screen</i></button>
+      <button class="circle transparent" data-zoom="plate" title="Show the whole plate"><i>crop_free</i></button>
       <span class="spacer"></span>
       <span class="muted" id="zoominfo"></span>
-      <button class="help" type="button" title="Scroll to zoom · drag to pan">?</button>
+      <button class="circle transparent small" type="button" title="Scroll to zoom · drag to pan"><i>help</i></button>
     </div>
 
     <div class="bar" id="bar-model">
-      <label>Z&times; <input type="range" id="mzex" min="1" max="40" value="6"></label>
-      <button class="tool" data-mview="top">Top</button>
-      <button class="tool" data-mview="reset">Reset</button>
+      <span class="zlabel" title="Exaggerate the height">Z&times;
+        <label class="slider small"><input type="range" id="mzex" min="1" max="40" value="6"><span></span></label></span>
+      <button class="small border" data-mview="top"><i>arrow_downward</i><span>Top</span></button>
+      <button class="small border" data-mview="reset"><i>restart_alt</i><span>Reset</span></button>
       <span class="spacer"></span>
-      <button class="help" type="button" title="Drag: orbit · Shift-drag: pan · Scroll: zoom&#10;Drag a modifier to move it · Alt-drag to raise it">?</button>
+      <button class="circle transparent small" type="button" title="Drag: orbit · Shift-drag: pan · Scroll: zoom&#10;Drag a modifier to move it · Alt-drag to raise it"><i>help</i></button>
     </div>
 
     <div class="bar" id="bar-3d" style="display:none">
-      <label>Electrode <select id="pick3d" style="min-width:140px"></select></label>
-      <label>Z&times; <input type="range" id="zex" min="1" max="60" value="20"></label>
-      <label>Layer <select id="layer3d"><option value="all">all</option></select></label>
-      <label title="Crossings on the top layer"><input type="checkbox" id="showhumps" checked> Humps</label>
-      <button class="tool" data-view3d="reset">Reset</button>
+      <div class="field small border label suffix wide"><select id="pick3d"></select><label>Electrode</label><i>arrow_drop_down</i></div>
+      <span class="zlabel" title="Exaggerate the height">Z&times;
+        <label class="slider small"><input type="range" id="zex" min="1" max="60" value="20"><span></span></label></span>
+      <div class="field small border label suffix"><select id="layer3d"><option value="all">all</option></select><label>Layer</label><i>arrow_drop_down</i></div>
+      <label class="checkbox" title="Crossings on the top layer"><input type="checkbox" id="showhumps" checked><span>Humps</span></label>
+      <button class="small border" data-view3d="reset"><i>restart_alt</i><span>Reset</span></button>
       <span class="spacer"></span>
       <span class="muted" id="info3d"></span>
-      <button class="help" type="button" title="Drag: orbit · Shift-drag: pan · Scroll: zoom">?</button>
+      <button class="circle transparent small" type="button" title="Drag: orbit · Shift-drag: pan · Scroll: zoom"><i>help</i></button>
     </div>
 
     <div class="pane" id="pane-plate" role="tabpanel">
       <div id="messages"></div>
-      <div id="svgwrap"><div class="empty">Drop an STL to begin</div></div>
-      <div id="busy"><span id="busytext">Slicing…</span></div>
+      <div id="svgwrap"><div class="empty"><i>upload_file</i>Drop an STL to begin</div></div>
+      <div id="busy"><progress class="circle"></progress><span id="busytext">Slicing…</span></div>
     </div>
 
     <div class="pane on" id="pane-model" role="tabpanel">
@@ -416,17 +511,18 @@
     </div>
 
     <div class="bar" id="bar-paths" style="display:none">
-      <label>Electrode <select id="pickpaths" style="min-width:140px"></select></label>
-      <label>Layer <select id="layerpaths"></select></label>
-      <label title="Dispensing tip width">Tip &micro;m <input type="number" id="tip" value="100" min="10" max="2000" step="10" style="width:72px"></label>
-      <label>Pass <select id="passpaths"><option value="all">all</option></select></label>
+      <div class="field small border label suffix wide"><select id="pickpaths"></select><label>Electrode</label><i>arrow_drop_down</i></div>
+      <div class="field small border label suffix narrow"><select id="layerpaths"></select><label>Layer</label><i>arrow_drop_down</i></div>
+      <div class="field small border label narrow" title="Dispensing tip width">
+        <input type="number" id="tip" value="100" min="10" max="2000" step="10"><label>Tip &micro;m</label></div>
+      <div class="field small border label suffix narrow"><select id="passpaths"><option value="all">all</option></select><label>Pass</label><i>arrow_drop_down</i></div>
       <span class="spacer"></span>
-      <span class="muted">
-        <span class="swatch" style="background:var(--model)"></span> GTL copper
-        &nbsp;<span class="swatch" style="background:var(--accent);opacity:.45"></span> tip
-        &nbsp;<span class="swatch" style="background:var(--infill)"></span> unreachable
+      <span class="legend muted">
+        <span title="Area this GTL pass asks the NOVA to fill"><span class="swatch" style="background:var(--model)"></span>Target area</span>
+        <span><span class="swatch" style="background:var(--accent);opacity:.45"></span>tip</span>
+        <span><span class="swatch" style="background:var(--infill)"></span>unreachable</span>
       </span>
-      <button class="help" type="button" title="Scroll: zoom · drag: pan · double-click: fit">?</button>
+      <button class="circle transparent small" type="button" title="Scroll: zoom · drag: pan · double-click: fit"><i>help</i></button>
     </div>
 
     <div class="pane" id="pane-paths" role="tabpanel">
@@ -439,9 +535,9 @@
       <div class="empty" id="empty3d">Slice a plate, then pick an electrode.</div>
     </div>
 
-    <details open>
-      <summary title="Hover a column for its meaning · click a row to view it in 3D">Measurements</summary>
-      <div class="inner" style="overflow-x:auto">
+    <details open id="results">
+      <summary title="Hover a column for its meaning · click a row to view it in 3D"><i>expand_more</i>Measurements</summary>
+      <div class="inner">
         <table id="stats">
           <thead><tr>
             <th title="Infill pattern">pattern</th>
@@ -598,8 +694,7 @@
   /** The one-line summary on the collapsed Printer tray. */
   function digest() {
     $("printer-digest").textContent =
-      `${$("plate_x").value}\u00d7${$("plate_y").value}\u00d7${$("z_travel").value} mm` +
-      ` \u00b7 ${$("line_width").value} mm bead`;
+      `${$("plate_x").value}\u00d7${$("plate_y").value} \u00b7 ${$("line_width").value} mm`;
   }
 
   // =====================================================================
@@ -615,7 +710,7 @@
         bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
       }
       state.stl = btoa(bin); state.filename = file.name;
-      $("drop").innerHTML = `<strong>${escapeHtml(file.name)}</strong><small>${(file.size / 1024).toFixed(0)} kB · click to replace</small>`;
+      $("drop").innerHTML = `<i>description</i><strong>${escapeHtml(file.name)}</strong><small>${(file.size / 1024).toFixed(0)} kB · click to replace</small>`;
       $("run").disabled = false;
       state.view = null; state.userMoved = false;   // a new model gets a fresh fit
       // Modifiers were placed against the old model; they mean nothing on this one.
@@ -761,7 +856,7 @@
 
     if (data.warnings.length) message("warn", "Check before printing", data.warnings);
     // The notes live on the plate tab; say so from whichever tab is showing.
-    $("tab-plate").textContent = data.warnings.length ? `Plate (${data.warnings.length} ⚠)` : "Plate";
+    $("tab-plate").querySelector("span").textContent = data.warnings.length ? `Plate (${data.warnings.length} ⚠)` : "Plate";
     $("tab-plate").title = data.warnings.length ? "Warnings about this plate are shown here" : "";
     if ($("svg_mode").value === "outline") {
       message("warn", "Outline mode hides crossings — use stroke to see them");
@@ -1219,13 +1314,16 @@
       const el = document.createElement("div");
       el.className = "mod"; el.dataset.id = String(m.id);
       el.setAttribute("aria-current", String(m.id === state.selected));
-      const trio = (k, extra) => `<span class="trio">${[0, 1, 2].map((a) =>
-        `<input type="number" step="0.1" data-k="${k}" data-a="${a}" title="${"xyz"[a]}"${extra}>`).join("")}</span>`;
+      const names = { center: ["Centre x", "Centre y", "Centre z"],
+                      size: cyl ? ["Dia. x", "Dia. y", "Height"] : ["Width", "Depth", "Height"] };
+      const trio = (k, extra) => `<div class="trio">${[0, 1, 2].map((a) =>
+        `<div class="field small border label"><input type="number" step="0.1" placeholder=" " ` +
+        `data-k="${k}" data-a="${a}"${extra}><label>${names[k][a]}</label></div>`).join("")}</div>`;
       el.innerHTML =
-        `<div class="head"><b>${cyl ? "Cylinder" : "Box"} ${i + 1}</b>` +
-        `<button type="button" title="Remove" aria-label="Remove">&times;</button></div>` +
-        `<div class="rows"><span title="Centre x, y, z in mm, in the model's own frame">Centre</span>${trio("center", "")}` +
-        `<span title="${cyl ? "Diameter along x and along y, and height" : "Width, depth and height"}, mm">Size</span>` +
+        `<div class="head"><i>${cyl ? "circle" : "square"}</i><b>${cyl ? "Cylinder" : "Box"} ${i + 1}</b>` +
+        `<button type="button" class="circle transparent small" title="Remove" aria-label="Remove"><i>close</i></button></div>` +
+        `<div title="Centre, mm, in the model's own frame">${trio("center", "")}</div>` +
+        `<div title="${cyl ? "Diameter along x and along y, and height" : "Width, depth and height"}, mm">` +
         `${trio("size", ' min="0.01"')}</div>`;
       for (const inp of el.querySelectorAll("input")) {
         const k = inp.dataset.k, a = Number(inp.dataset.a);
@@ -1243,7 +1341,7 @@
       list.append(el);
     });
     const any = state.modifiers.length > 0;
-    $("outside-row").style.display = any ? "" : "none";
+    $("outside-field").style.display = any ? "" : "none";
     drawModel();
   }
 
@@ -1629,6 +1727,7 @@
     for (const t of TABS) {
       const on = t === which;
       $(`tab-${t}`).setAttribute("aria-selected", String(on));
+      $(`tab-${t}`).classList.toggle("active", on);
       $(`pane-${t}`).classList.toggle("on", on);
       $(`bar-${t}`).style.display = on ? "" : "none";
     }
@@ -1642,7 +1741,16 @@
     else if (state.pendingFit || !state.fit) refit();
     else applyView();
   }
-  for (const t of TABS) $(`tab-${t}`).addEventListener("click", () => tab(t));
+  for (const t of TABS) {
+    // Material tabs are links with nowhere to go, so make them focusable and
+    // let Enter and Space choose them as a button would.
+    const el = $(`tab-${t}`);
+    el.tabIndex = 0;
+    el.addEventListener("click", () => tab(t));
+    el.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); tab(t); }
+    });
+  }
 
   // =====================================================================
   // results table
